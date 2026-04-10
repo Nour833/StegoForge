@@ -23,7 +23,7 @@ def decode_audio_to_wav(audio_bytes: bytes, ext: str) -> bytes:
     ext: file extension including dot, e.g. '.mp3', '.flac', '.ogg'
     """
     ext = ext.lower()
-    if ext == ".wav":
+    if ext == ".wav" or audio_bytes.startswith(b"RIFF"):
         return audio_bytes  # already WAV, no conversion needed
 
     if not has_ffmpeg():

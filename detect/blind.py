@@ -52,64 +52,117 @@ HEADER_SIZE = 4
 
 class BlindExtractor(BaseDetector):
     name = "blind"
-    supported_extensions = [".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tiff"]
+    supported_extensions = [
+        ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tiff",
+        ".wav", ".flac", ".mp3", ".ogg"
+    ]
 
     def analyze(self, file_bytes: bytes, filename: str = "") -> DetectionResult:
         start_time = time.time()
         candidates = []
 
-        try:
-            img = Image.open(io.BytesIO(file_bytes))
-            if img.mode not in ("RGB", "RGBA"):
-                if img.mode == "P":
-                    img = img.convert("RGBA")
-                else:
-                    img = img.convert("RGB")
-            arr = np.array(img, dtype=np.uint8)
-        except Exception as e:
-            return DetectionResult(
-                method=self.name,
-                detected=False,
-                confidence=0.0,
-                details={"error": f"Failed to load image: {e}"},
-            )
+        import os
+        ext = os.path.splitext(filename)[1].lower() if filename else ""
 
-        has_alpha = (img.mode == "RGBA")
-        channel_names = ["R", "G", "B"] + (["A"] if has_alpha else [])
-        depths = [1, 2, 3, 4]
-        orders = ["normal", "reversed"]
-
-        # All RGB channel order permutations
-        channel_permutations = list(itertools.permutations([0, 1, 2]))
-
-        for channel_name in channel_names:
-            ch_idx = CHANNELS[channel_name]
-            if ch_idx >= arr.shape[2] if len(arr.shape) == 3 else 0:
-                continue
-
-            for depth in depths:
-                for row_order in orders:
-                    # Try with each channel order permutation for R/G/B
-                    perms_to_try = channel_permutations if channel_name in ("R", "G", "B") else [None]
-
-                    for perm in perms_to_try:
+        if ext in (".wav", ".flac", ".mp3", ".ogg"):
+            # AUDIO BLIND EXTRACTION
+            from cli import get_encoder
+            for method_name in ["audio-lsb", "phase"]:
+                try:
+                    encoder = get_encoder(method_name)
+                    for depth in [1, 2, 3, 4]:
                         try:
-                            result = self._try_extract(arr, ch_idx, depth, row_order, perm)
-                            if result is not None:
-                                payload, score = result
+                            raw_payload = encoder.decode(file_bytes, ext=ext, depth=depth)
+                            # Let's score it.
+                            score = 0.0
+                            payload_type = "Unknown bin"
+                            if raw_payload.startswith(b"SFRG"):
+                                score = 1.0
+                                payload_type = "StegoForge encrypted payload"
+                            else:
+                                for magic, desc in KNOWN_MAGIC.items():
+                                    if raw_payload.startswith(magic):
+                                        score = 0.8
+                                        payload_type = desc
+                                        break
+                                if score == 0.0:
+                                    try:
+                                        text = raw_payload.decode("utf-8")
+                                        if sum(1 for c in text if c.isprintable()) / max(1, len(text)) > 0.9:
+                                            score = 0.6
+                                            payload_type = "Text data"
+                                    except UnicodeDecodeError:
+                                        score = 0.1
+                                        
+                            if score > 0.0:
                                 candidates.append({
-                                    "channel": channel_name,
+                                    "channel": method_name,
                                     "depth": depth,
-                                    "row_order": row_order,
-                                    "channel_perm": list(perm) if perm else None,
-                                    "payload_bytes": len(payload),
+                                    "row_order": "normal",
+                                    "channel_perm": None,
+                                    "payload_bytes": len(raw_payload),
                                     "score": score,
-                                    "payload_preview": _describe_payload(payload),
-                                    "payload": payload,
+                                    "payload_preview": _describe_payload(raw_payload),
+                                    "payload": raw_payload,
                                 })
-                        except Exception:
+                        except ValueError:
                             continue
+                except Exception:
+                    pass
 
+        else:
+            # IMAGE BLIND EXTRACTION
+            try:
+                img = Image.open(io.BytesIO(file_bytes))
+                if img.mode not in ("RGB", "RGBA"):
+                    if img.mode == "P":
+                        img = img.convert("RGBA")
+                    else:
+                        img = img.convert("RGB")
+                arr = np.array(img, dtype=np.uint8)
+            except Exception as e:
+                return DetectionResult(
+                    method=self.name,
+                    detected=False,
+                    confidence=0.0,
+                    details={"skipped": True, "interpretation": "Format not supported or invalid image"},
+                )
+
+            has_alpha = (img.mode == "RGBA")
+            channel_names = ["R", "G", "B"] + (["A"] if has_alpha else [])
+            depths = [1, 2, 3, 4]
+            orders = ["normal", "reversed"]
+
+            # All RGB channel order permutations
+            channel_permutations = list(itertools.permutations([0, 1, 2]))
+
+            for channel_name in channel_names:
+                ch_idx = CHANNELS[channel_name]
+                if ch_idx >= arr.shape[2] if len(arr.shape) == 3 else 0:
+                    continue
+
+                for depth in depths:
+                    for row_order in orders:
+                        # Try with each channel order permutation for R/G/B
+                        perms_to_try = channel_permutations if channel_name in ("R", "G", "B") else [None]
+
+                        for perm in perms_to_try:
+                            try:
+                                result = self._try_extract(arr, ch_idx, depth, row_order, perm)
+                                if result is not None:
+                                    payload, score = result
+                                    candidates.append({
+                                        "channel": channel_name,
+                                        "depth": depth,
+                                        "row_order": row_order,
+                                        "channel_perm": list(perm) if perm else None,
+                                        "payload_bytes": len(payload),
+                                        "score": score,
+                                        "payload_preview": _describe_payload(payload),
+                                        "payload": payload,
+                                    })
+                            except Exception:
+                                continue
         elapsed = time.time() - start_time
         candidates.sort(key=lambda c: c["score"], reverse=True)
 

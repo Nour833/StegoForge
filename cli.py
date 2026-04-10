@@ -110,7 +110,7 @@ EXT_TO_METHOD = {
     ".jpg":  "dct", ".jpeg": "dct",
     ".gif":  "palette",
     ".wav":  "audio-lsb", ".flac": "audio-lsb",
-    ".mp3":  "phase", ".ogg": "phase",
+    ".mp3":  "audio-lsb", ".ogg": "audio-lsb",
     ".txt":  "unicode",
     ".pdf":  "pdf",
     ".docx": "docx",
@@ -257,36 +257,51 @@ def op_decode(
         raise IOError(f"File not found: {file}")
 
     stego_bytes = file_path.read_bytes()
-    method = method or auto_detect_method(file)
-    encoder = get_encoder(method)
-
     ext = file_path.suffix.lower()
-    kwargs = {"key": key}
-    if method in ("audio-lsb", "phase", "spectrogram"):
-        kwargs["ext"] = ext
-    if method in ("docx", "xlsx", "office"):
-        kwargs["filename"] = str(file_path)
+    methods_to_try = [method] if method else []
+    if not methods_to_try:
+        suggested = auto_detect_method(file)
+        if suggested in ("audio-lsb", "phase", "spectrogram"):
+            methods_to_try = ["audio-lsb", "phase", "spectrogram"]
+        elif suggested in ("lsb", "dct", "alpha", "palette"):
+            methods_to_try = ["lsb", "dct", "alpha", "palette"]
+        else:
+            methods_to_try = [suggested]
 
-    # Guess depth — try 1 first, fallback to higher if we got data
-    for depth in [1, 2, 3, 4]:
-        try:
-            kwargs["depth"] = depth
-            raw_bytes = encoder.decode(stego_bytes, **kwargs)
-            break
-        except ValueError:
-            if depth == 4:
-                raise
-            continue
-
-    # Decrypt
     from core.crypto import aes, decoy as decoy_mod
-    try:
-        payload = decoy_mod.decode_dual(raw_bytes, key)
-    except ValueError:
-        try:
-            payload = aes.decrypt(raw_bytes, key)
-        except ValueError:
-            raise ValueError("Decryption failed — wrong key or no encrypted payload found")
+
+    payload = None
+    last_error = None
+
+    for try_method in methods_to_try:
+        encoder = get_encoder(try_method)
+        kwargs = {"key": key}
+        if try_method in ("audio-lsb", "phase", "spectrogram"):
+            kwargs["ext"] = ext
+        if try_method in ("docx", "xlsx", "office"):
+            kwargs["filename"] = str(file_path)
+            
+        for depth in [1, 2, 3, 4]:
+            try:
+                kwargs["depth"] = depth
+                raw_bytes = encoder.decode(stego_bytes, **kwargs)
+                try:
+                    payload = decoy_mod.decode_dual(raw_bytes, key)
+                    method = try_method
+                    break
+                except ValueError:
+                    payload = aes.decrypt(raw_bytes, key)
+                    method = try_method
+                    break
+            except ValueError as e:
+                last_error = str(e)
+                payload = None
+
+        if payload is not None:
+            break
+
+    if payload is None:
+        raise ValueError(f"Failed to decode payload: wrong key, wrong method, or corrupted file. Last error: {last_error}")
 
     # Save output
     if output:
@@ -521,8 +536,14 @@ def print_capacity_result(result: dict):
 def _print_single_result(r: dict):
     detected = r["detected"]
     confidence_pct = int(r["confidence"] * 100)
-    status_icon = "[bold red]🔴[/bold red]" if detected else "[dim green]🟢[/dim green]"
-    status_label = "[bold red]DETECTED[/bold red]" if detected else "[dim]CLEAN[/dim]"
+    details = r.get("details", {})
+    
+    if details.get("skipped", False):
+        status_icon = "[dim]⏭[/dim]"
+        status_label = "[dim]SKIPPED[/dim]"
+    else:
+        status_icon = "[bold red]🔴[/bold red]" if detected else "[dim green]🟢[/dim green]"
+        status_label = "[bold red]DETECTED[/bold red]" if detected else "[dim]CLEAN[/dim]"
 
     # Build confidence bar
     bar_filled = int(confidence_pct / 5)
@@ -536,7 +557,6 @@ def _print_single_result(r: dict):
     table.add_row("Status", f"{status_icon} {status_label}")
     table.add_row("Confidence", f"[{bar_color}]{bar}[/{bar_color}] {confidence_pct}%")
 
-    details = r.get("details", {})
     interp = details.get("interpretation", "")
     if interp:
         table.add_row("Analysis", interp)
@@ -741,8 +761,11 @@ def _launch_web(port: int = 5000):
     import sys
     venv_python = Path(__file__).parent / "venv" / "bin" / "python"
     py = str(venv_python) if venv_python.exists() else sys.executable
-    subprocess.Popen([py, "-m", "web.app", "--port", str(port)])
-    console.print(f"[{C_SUCCESS}]Web UI launched at http://localhost:{port}[/{C_SUCCESS}]")
+    console.print(f"[{C_SUCCESS}]Launching Web UI at http://localhost:{port}... (Press Ctrl+C to quit)[/{C_SUCCESS}]")
+    try:
+        subprocess.run([py, "-m", "web.app", "--port", str(port)])
+    except KeyboardInterrupt:
+        console.print(f"\n[{C_DIM}]Web UI stopped.[/{C_DIM}]")
 
 
 # ── Typer commands ────────────────────────────────────────────────────────────

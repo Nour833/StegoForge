@@ -85,10 +85,9 @@ def create_app():
             encode_kwargs = {"depth": depth, "key": key, **cap_kwargs}
             stego_bytes = encoder.encode(carrier_bytes, embed_bytes, **encode_kwargs)
 
-            # Audio stego output is always WAV (MP3 encoding destroys embedded data)
+            # Output uses original extension to fulfill user request
             stem = P(carrier_name).stem
-            out_ext = ".wav" if method in ("audio-lsb", "phase", "spectrogram") else ext
-            out_name = f"{stem}_stego{out_ext}"
+            out_name = f"{stem}_stego{ext}"
 
             buf = io.BytesIO(stego_bytes)
             buf.seek(0)
@@ -123,32 +122,47 @@ def create_app():
             from core.crypto import aes, decoy as decoy_mod
             from pathlib import Path as P
 
-            method = method or auto_detect_method(filename)
-            encoder = get_encoder(method)
-
             ext = P(filename).suffix.lower()
-            kwargs = {"key": key, "depth": 1}
-            if method in ("audio-lsb", "phase", "spectrogram"):
-                kwargs["ext"] = ext
-            if method in ("docx", "xlsx", "office"):
-                kwargs["filename"] = filename
+            methods_to_try = [method] if method else []
+            if not methods_to_try:
+                suggested = auto_detect_method(filename)
+                if suggested in ("audio-lsb", "phase", "spectrogram"):
+                    methods_to_try = ["audio-lsb", "phase", "spectrogram"]
+                elif suggested in ("lsb", "dct", "alpha", "palette"):
+                    methods_to_try = ["lsb", "dct", "alpha", "palette"]
+                else:
+                    methods_to_try = [suggested]
 
-            # Try depths
-            raw_bytes = None
-            for depth in [1, 2, 3, 4]:
-                try:
-                    kwargs["depth"] = depth
-                    raw_bytes = encoder.decode(stego_bytes, **kwargs)
+            payload = None
+            last_error = None
+
+            for try_method in methods_to_try:
+                encoder = get_encoder(try_method)
+                kwargs = {"key": key}
+                if try_method in ("audio-lsb", "phase", "spectrogram"):
+                    kwargs["ext"] = ext
+                if try_method in ("docx", "xlsx", "office"):
+                    kwargs["filename"] = filename
+                
+                for depth in [1, 2, 3, 4]:
+                    try:
+                        kwargs["depth"] = depth
+                        raw_bytes = encoder.decode(stego_bytes, **kwargs)
+                        try:
+                            payload = decoy_mod.decode_dual(raw_bytes, key)
+                            break
+                        except ValueError:
+                            payload = aes.decrypt(raw_bytes, key)
+                            break
+                    except ValueError as e:
+                        last_error = str(e)
+                        payload = None
+                
+                if payload is not None:
                     break
-                except ValueError:
-                    if depth == 4:
-                        raise
 
-            # Decrypt
-            try:
-                payload = decoy_mod.decode_dual(raw_bytes, key)
-            except ValueError:
-                payload = aes.decrypt(raw_bytes, key)
+            if payload is None:
+                raise ValueError(f"Failed to decode payload: wrong key, wrong method, or corrupted file. Last error: {last_error}")
 
             # Try to guess extension
             ext_out = ".bin"

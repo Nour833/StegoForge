@@ -1,13 +1,27 @@
 
 <div align="center">
 
-```
+```text
 ███████╗████████╗███████╗ ██████╗  ██████╗ ███████╗ ██████╗ ██████╗  ██████╗ ███████╗
 ██╔════╝╚══██╔══╝██╔════╝██╔════╝ ██╔═══██╗██╔════╝██╔═══██╗██╔══██╗██╔════╝ ██╔════╝
 ███████╗   ██║   █████╗  ██║  ███╗██║   ██║█████╗  ██║   ██║██████╔╝██║  ███╗█████╗  
 ╚════██║   ██║   ██╔══╝  ██║   ██║██║   ██║██╔══╝  ██║   ██║██╔══██╗██║   ██║██╔══╝  
 ███████║   ██║   ███████╗╚██████╔╝╚██████╔╝██║     ╚██████╔╝██║  ██║╚██████╔╝███████╗
 ╚══════╝   ╚═╝   ╚══════╝ ╚═════╝  ╚═════╝ ╚═╝      ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚══════╝
+
+  ✨ Chi-Square  ·  RS Analysis  ·  EXIF Forensics  ·  Blind Extraction
+
+  🚀 v1.0.0  ·  🛡️ 12 encoding methods  ·  🔍 4 detection engines  ·  🔐 AES-256-GCM
+
+╭────────┬────────────────┬───────────────────────────────────────────────╮
+│  1     │  Encode        │  Embed a secret payload in any carrier        │
+│  2     │  Decode        │  Extract & decrypt a hidden payload           │
+│  3     │  Detect        │  Analyze a file for hidden content            │
+│  4     │  CTF Mode      │  Run all detectors, get full forensic report  │
+│  5     │  Capacity      │  Check how much data a carrier can hold       │
+│  6     │  Web UI        │  Launch the local web interface               │
+│  q     │  Quit          │  Exit StegoForge                              │
+╰────────┴────────────────┴───────────────────────────────────────────────╯
 ```
 
 **The most complete open-source steganography toolkit.**  
@@ -38,11 +52,11 @@ $ stegoforge encode --carrier cover.png --payload secret.txt --key "mypassword" 
 [+] Output: cover_stego.png
 [+] Statistical profile: indistinguishable from baseline (chi² = 0.021)
 
-$ stegoforge ctf --file suspicious.png
-[*] Running all detectors on suspicious.png ...
-[+] Chi-square LSB anomaly detected (confidence: 94%)
-[+] RS analysis: ~18% of pixels carry hidden data
-[!] Blind extractor found payload at: RGB channel R, 1-bit LSB, no encryption
+$ stegoforge ctf --file suspicious.mp3
+[*] Running all detectors on suspicious.mp3 ...
+[⏭] Chi-square LSB anomaly      SKIPPED
+[⏭] RS analysis                 SKIPPED 
+[!] Blind extractor found payload at: audio-lsb, depth=1, AES encrypted blob
 [+] Extracted 412 bytes → saved to extracted_payload.bin
 ```
 
@@ -77,12 +91,12 @@ stegoforge/
 │   ├── Chi-square attack   LSB frequency anomaly detection
 │   ├── RS analysis         Capacity estimation without the key
 │   ├── EXIF scanner        Metadata, thumbnail, and comment analysis
-│   └── Blind extractor     Brute-force common patterns, auto-report
+│   └── Blind extractor     Brute-force common patterns across Images & Audio file types
 │
 └── Interfaces
     ├── CLI                 Pipe-friendly, JSON output, scriptable
-    ├── Web UI (Flask)      Local drag-and-drop, visual diff view
-    └── CTF mode            One command, every detector, ranked report
+    ├── Web UI (Flask)      Local drag-and-drop, visual diff view, graceful interrupt
+    └── CTF mode            One command, every detector, ranked report, smart skipping
 ```
 
 ---
@@ -106,7 +120,20 @@ stegoforge web  # opens at http://localhost:5000
 
 ---
 
-## Usage
+## Interactive Menu (Recommended for Beginners!) 🎨
+
+Don't want to memorize terminal commands? Just run the tool on its own to access the interactive CLI!
+
+```bash
+stegoforge
+```
+
+The menu will seamlessly guide you step-by-step through encoding, decrypting payloads, running CTF forensics, or spinning up the Drag-and-Drop Web UI. Nothing boring, incredibly intuitive.
+
+
+---
+
+## Command Line Usage
 
 ### Encode a payload
 
@@ -140,12 +167,13 @@ stegoforge decode -f music_stego.wav -k "key" --method phase
 ```bash
 # Run everything at once (CTF mode — recommended)
 stegoforge ctf -f suspicious.png
+stegoforge ctf -f secret_audio.mp3  # Audio blind-extraction fully supported
 
 # Individual detectors
 stegoforge detect --chi2 -f image.png
 stegoforge detect --rs -f image.png
 stegoforge detect --exif -f document.pdf
-stegoforge detect --blind -f unknown.png   # tries all patterns
+stegoforge detect --blind -f unknown.wav   # tries all depth patterns & LSB/Phase
 
 # JSON output for scripting
 stegoforge ctf -f image.png --json > report.json
@@ -171,7 +199,7 @@ stegoforge ctf --batch ./suspicious_files/
 | RS Analysis | Images | Payload capacity estimation without key |
 | Phase check | Audio | Phase discontinuities at segment boundaries |
 | EXIF scanner | All | Metadata, hidden thumbnails, XMP, comments |
-| Blind extractor | Images | Auto-tries all common encoding parameters |
+| Blind extractor | Images & Audio | Auto-tries all common encoding patterns & decodes AES encrypted magic |
 
 ---
 
@@ -198,6 +226,8 @@ $ stegoforge ctf --file chall.png
 ╠══════════════════════════════════════════════╣
 ║  Saved: extracted_R_1bit.bin                 ║
 ╚══════════════════════════════════════════════╝
+
+Note: Audio files parsed via CTF mode gracefully skip image-only forensic tooling (e.g., Chi-Square & RS Analysis are labeled `SKIPPED`) to avoid false `CLEAN` results, while seamlessly parsing PCM bitstreams directly into the upgraded audio-compatible Blind Extractor.
 ```
 
 ---
@@ -250,7 +280,8 @@ stegoforge/
 | WebP | ✅ Alpha | ✅ | ✅ |
 | WAV | ✅ LSB, Phase, Spectrogram | ✅ | ✅ |
 | FLAC | ✅ LSB, Phase | ✅ | ✅ |
-| MP3 | ✅ Phase only | ✅ | ✅ |
+| MP3 | ✅ LSB, Phase, Spectrogram | ✅ | ✅ |
+| OGG | ✅ LSB, Phase, Spectrogram | ✅ | ✅ |
 | PDF | ✅ Stream injection | ✅ | ✅ |
 | DOCX | ✅ XML streams | ✅ | ✅ |
 | XLSX | ✅ XML streams | ✅ | ✅ |

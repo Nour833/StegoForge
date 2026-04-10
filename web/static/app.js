@@ -251,14 +251,20 @@ function renderConfidenceBar(confidence) {
 
 function renderDetectorResult(r) {
   const detected = r.detected;
-  const statusIcon = detected ? '🔴' : '🟢';
-  const statusLabel = detected ? '<span style="color:var(--accent-red)">DETECTED</span>' : '<span style="color:var(--accent-green)">CLEAN</span>';
-  const cardClass = detected ? 'detected' : '';
+  const details = r.details || {};
+  const isSkipped = details.skipped === true;
+
+  const statusIcon = isSkipped ? '⏭' : (detected ? '🔴' : '🟢');
+  const statusLabel = isSkipped ? '<span style="color:var(--text-muted)">SKIPPED</span>' : (detected ? '<span style="color:var(--accent-red)">DETECTED</span>' : '<span style="color:var(--accent-green)">CLEAN</span>');
+  const cardClass = isSkipped ? 'clean' : (detected ? 'detected' : '');
 
   let extraHtml = '';
-  const details = r.details || {};
 
-  if (r.method === 'chi2') {
+  if (isSkipped) {
+    extraHtml += `<div class="result-grid">
+      <div class="result-key">Analysis</div><div class="result-val">${details.interpretation || 'Format not supported'}</div>
+    </div>`;
+  } else if (r.method === 'chi2') {
     extraHtml += `<div class="result-grid">
       <div class="result-key">p-value</div><div class="result-val">${(details.p_value || 0).toFixed(4)}</div>
       <div class="result-key">χ² stat</div><div class="result-val">${(details.chi2_statistic || 0).toFixed(2)}</div>
