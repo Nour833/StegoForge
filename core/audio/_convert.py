@@ -11,9 +11,21 @@ import wave
 from pathlib import Path
 
 
+def _ffmpeg_cmd() -> str | None:
+    exe = shutil.which("ffmpeg")
+    if exe:
+        return exe
+    try:
+        import imageio_ffmpeg  # type: ignore
+
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return None
+
+
 def has_ffmpeg() -> bool:
     """Check if ffmpeg is available on the system."""
-    return shutil.which("ffmpeg") is not None
+    return _ffmpeg_cmd() is not None
 
 
 def decode_audio_to_wav(audio_bytes: bytes, ext: str) -> bytes:
@@ -32,10 +44,17 @@ def decode_audio_to_wav(audio_bytes: bytes, ext: str) -> bytes:
             "Install ffmpeg: sudo apt install ffmpeg"
         )
 
+    cmd = _ffmpeg_cmd()
+    if not cmd:
+        raise ValueError(
+            f"ffmpeg is required to process {ext} files but was not found. "
+            "Install ffmpeg: sudo apt install ffmpeg (or pip install imageio-ffmpeg)"
+        )
+
     try:
         result = subprocess.run(
             [
-                "ffmpeg",
+                cmd,
                 "-y",                    # overwrite
                 "-f", ext.lstrip("."),   # input format
                 "-i", "pipe:0",          # read from stdin
@@ -56,7 +75,7 @@ def decode_audio_to_wav(audio_bytes: bytes, ext: str) -> bytes:
     except subprocess.TimeoutExpired:
         raise ValueError(f"ffmpeg timed out converting {ext}")
     except FileNotFoundError:
-        raise ValueError("ffmpeg not found — install it with: sudo apt install ffmpeg")
+        raise ValueError("ffmpeg not found — install with: sudo apt install ffmpeg or pip install imageio-ffmpeg")
 
 
 def encode_wav_to_format(wav_bytes: bytes, ext: str) -> bytes:

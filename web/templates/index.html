@@ -9,7 +9,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/style.css">
 </head>
-<body>
+<body data-initial-tab="{{ initial_tab|default('encode') }}">
 <!-- Local processing notice -->
 <div id="local-notice">
   🔒 All files are processed <strong>locally</strong> on your machine. Nothing is uploaded to any server.
@@ -31,6 +31,7 @@
       <button class="tab-btn" data-tab="detect" id="nav-detect">Detect</button>
       <button class="tab-btn ctf-btn" data-tab="ctf" id="nav-ctf">⚡ CTF Mode</button>
       <button class="tab-btn" data-tab="capacity" id="nav-capacity">Capacity</button>
+      <button class="tab-btn" data-tab="survive" id="nav-survive">Survive</button>
       <button class="tab-btn" data-tab="help" id="nav-help">Help</button>
     </nav>
   </div>
@@ -67,8 +68,8 @@
       </label>
       <div class="drop-zone" id="enc-carrier-drop">
         <span class="drop-icon">🖼</span>
-        <span class="drop-text">Drop a PNG, JPG, BMP, WAV, FLAC, MP3, PDF, DOCX, TXT<br>or <u>click to browse</u></span>
-        <input type="file" id="enc-carrier" name="carrier" accept=".png,.jpg,.jpeg,.bmp,.gif,.webp,.wav,.flac,.mp3,.ogg,.pdf,.docx,.xlsx,.txt" class="file-input">
+        <span class="drop-text">Drop a PNG, JPG, BMP, MP4, WEBM, WAV, FLAC, MP3, PDF, DOCX, TXT<br>or <u>click to browse</u></span>
+        <input type="file" id="enc-carrier" name="carrier" accept=".png,.jpg,.jpeg,.bmp,.gif,.webp,.mp4,.webm,.wav,.flac,.mp3,.ogg,.pdf,.docx,.xlsx,.txt" class="file-input">
       </div>
       <div class="file-info" id="enc-carrier-info"></div>
     </div>
@@ -100,33 +101,55 @@
       <div class="input-tip">💡 Tip: Use Argon2-derived keys. The stronger the passphrase, the harder to crack.</div>
     </div>
 
-    <!-- Method -->
+    <!-- Method Pills -->
     <div class="form-group">
-      <label class="form-label" for="enc-method">
+      <label class="form-label">
         Encoding Method
-        <span class="label-hint">Auto-detected from carrier format — or choose manually</span>
+        <span class="label-hint">Pill selector with forensic resistance guidance</span>
       </label>
-      <select id="enc-method" name="method" class="form-select">
-        <option value="">Auto-detect (recommended)</option>
-        <optgroup label="🖼 Image">
-          <option value="lsb" data-desc="Least Significant Bit — hides data in image pixels. Best for PNG/BMP. Invisible to the naked eye. Highest capacity.">LSB — Pixel LSB (PNG/BMP)</option>
-          <option value="dct" data-desc="DCT Frequency Domain — modifies JPEG DCT coefficients in the middle of the frequency spectrum. Survives some compression.">DCT — Frequency Domain (JPEG)</option>
-          <option value="alpha" data-desc="Alpha Channel — hides data in the transparency layer of PNG/WebP images. Completely invisible since alpha LSB changes are imperceptible.">Alpha — Transparency Channel (PNG/WebP)</option>
-          <option value="palette" data-desc="Palette Reorder — encodes bits as the ordering of color palette entries in GIF/indexed PNG. Very low capacity, completely invisible.">Palette — Color Order (GIF)</option>
-        </optgroup>
-        <optgroup label="🎵 Audio">
-          <option value="audio-lsb" data-desc="Audio LSB — embeds bits in the least significant bits of PCM audio samples. Inaudible to human ears. Best for WAV/FLAC.">Audio LSB — PCM samples (WAV/FLAC)</option>
-          <option value="phase" data-desc="Phase Coding — encodes bits as phase shifts in audio frequency segments. MP3-tolerant — survives light re-encoding.">Phase — Phase shift (WAV/MP3)</option>
-          <option value="spectrogram" data-desc="Spectrogram Art — embeds a visible image or text into the audio's frequency spectrum. Inaudible but visible in Audacity/SonicVisualiser.">Spectrogram — Visual in spectrum (WAV)</option>
-        </optgroup>
-        <optgroup label="📄 Document">
-          <option value="unicode" data-desc="Unicode Zero-Width — encodes bytes as invisible zero-width Unicode characters inserted between words. Completely invisible in any text viewer.">Unicode — Zero-width chars (TXT)</option>
-          <option value="pdf" data-desc="PDF Metadata — injects encrypted payload into a custom key in the PDF metadata dictionary. Invisible in all PDF viewers.">PDF — Metadata injection (PDF)</option>
-          <option value="docx" data-desc="DOCX XML — adds a hidden custom XML part to the Word document's ZIP archive. The document opens and looks normal in Word/LibreOffice.">DOCX — Custom XML (DOCX)</option>
-          <option value="xlsx" data-desc="XLSX XML — adds a hidden custom XML part to the Excel workbook's ZIP archive. Opens normally in Excel.">XLSX — Custom XML (XLSX)</option>
-        </optgroup>
-      </select>
+      <input type="hidden" id="enc-method" name="method" value="">
+      <div class="method-pills" id="enc-method-pills">
+        <button type="button" class="method-pill selected" data-method="" data-desc="Auto select based on carrier type." data-rating="Balanced">AUTO</button>
+        <button type="button" class="method-pill" data-method="adaptive-lsb" data-desc="Adaptive content-aware embedding; best against chi-square/RS." data-rating="High">ADAPTIVE-LSB ★</button>
+        <button type="button" class="method-pill" data-method="lsb" data-desc="Classic pixel LSB on PNG/BMP." data-rating="Low">LSB</button>
+        <button type="button" class="method-pill" data-method="dct" data-desc="JPEG frequency domain embedding." data-rating="Medium">DCT</button>
+        <button type="button" class="method-pill" data-method="fingerprint-lsb" data-desc="PRNU-aware embedding for camera-origin images." data-rating="High">FINGERPRINT-LSB</button>
+        <button type="button" class="method-pill" data-method="alpha" data-desc="Transparency channel embedding." data-rating="Medium">ALPHA</button>
+        <button type="button" class="method-pill" data-method="palette" data-desc="Palette index order carrier." data-rating="Medium">PALETTE</button>
+        <button type="button" class="method-pill" data-method="video-dct" data-desc="Keyframe-focused video embedding." data-rating="Medium">VIDEO-DCT</button>
+        <button type="button" class="method-pill" data-method="video-motion" data-desc="P-frame motion-style video embedding." data-rating="Medium">VIDEO-MOTION</button>
+        <button type="button" class="method-pill" data-method="audio-lsb" data-desc="PCM sample LSB embedding." data-rating="Medium">AUDIO-LSB</button>
+        <button type="button" class="method-pill" data-method="phase" data-desc="Audio phase coding." data-rating="Medium">PHASE</button>
+        <button type="button" class="method-pill" data-method="spectrogram" data-desc="Spectral-domain audio embedding." data-rating="Medium">SPECTROGRAM</button>
+        <button type="button" class="method-pill" data-method="unicode" data-desc="Zero-width unicode in text." data-rating="Medium">UNICODE</button>
+        <button type="button" class="method-pill" data-method="linguistic" data-desc="Synonym-channel natural text embedding." data-rating="High">LINGUISTIC</button>
+        <button type="button" class="method-pill" data-method="pdf" data-desc="PDF metadata/stream embedding." data-rating="Medium">PDF</button>
+        <button type="button" class="method-pill" data-method="docx" data-desc="Office XML stream embedding." data-rating="Medium">DOCX</button>
+        <button type="button" class="method-pill" data-method="xlsx" data-desc="Office XML stream embedding." data-rating="Medium">XLSX</button>
+      </div>
       <div class="method-description" id="method-desc"></div>
+    </div>
+
+    <!-- Live Capacity Matrix -->
+    <div class="form-group">
+      <label class="form-label">Live Capacity Matrix</label>
+      <div id="enc-capacity-matrix" class="capacity-matrix empty">Drop carrier and payload to compute per-method usage.</div>
+    </div>
+
+    <!-- Platform Survivability -->
+    <div class="form-group collapsible-section">
+      <button type="button" class="collapse-toggle" id="platform-toggle">
+        🌐 Platform Survivability (Auto method + wet paper)
+        <span class="collapse-arrow">▶</span>
+      </button>
+      <div class="collapse-content" id="platform-content" style="display:none">
+        <input type="hidden" id="enc-target" name="target" value="">
+        <input type="hidden" id="enc-wet-paper" name="wet_paper" value="0">
+        <input type="hidden" id="enc-test-survival" name="test_survival" value="0">
+        <div class="platform-pills" id="platform-pills"></div>
+        <div class="method-description" id="platform-note"></div>
+        <label class="checkbox-row"><input type="checkbox" id="enc-test-survival-check"> Run local survival simulation after encode</label>
+      </div>
     </div>
 
     <!-- Bit Depth -->
@@ -212,7 +235,7 @@
       <div class="drop-zone" id="dec-file-drop">
         <span class="drop-icon">🔍</span>
         <span class="drop-text">Drop the stego file here<br>or <u>click to browse</u></span>
-        <input type="file" id="dec-file" name="file" accept=".png,.jpg,.jpeg,.bmp,.gif,.webp,.wav,.flac,.mp3,.ogg,.pdf,.docx,.xlsx,.txt" class="file-input">
+        <input type="file" id="dec-file" name="file" accept=".png,.jpg,.jpeg,.bmp,.gif,.webp,.mp4,.webm,.wav,.flac,.mp3,.ogg,.pdf,.docx,.xlsx,.txt" class="file-input">
       </div>
       <div class="file-info" id="dec-file-info"></div>
     </div>
@@ -235,12 +258,17 @@
       <select id="dec-method" name="method" class="form-select">
         <option value="">Auto-detect</option>
         <option value="lsb">LSB</option>
+        <option value="adaptive-lsb">Adaptive LSB</option>
         <option value="dct">DCT (JPEG)</option>
+        <option value="video-dct">Video DCT</option>
+        <option value="video-motion">Video Motion</option>
         <option value="alpha">Alpha Channel</option>
         <option value="palette">Palette</option>
+        <option value="fingerprint-lsb">Fingerprint LSB</option>
         <option value="audio-lsb">Audio LSB</option>
         <option value="phase">Phase</option>
         <option value="unicode">Unicode</option>
+        <option value="linguistic">Linguistic</option>
         <option value="pdf">PDF</option>
         <option value="docx">DOCX</option>
         <option value="xlsx">XLSX</option>
@@ -289,6 +317,16 @@
       <div class="file-info" id="det-file-info"></div>
     </div>
 
+    <div class="detector-toggles">
+      <label class="checkbox-row"><input type="checkbox" name="chi2" checked> Chi-Square</label>
+      <label class="checkbox-row"><input type="checkbox" name="rs" checked> RS Analysis</label>
+      <label class="checkbox-row"><input type="checkbox" name="exif" checked> EXIF</label>
+      <label class="checkbox-row"><input type="checkbox" name="blind" checked> Blind</label>
+      <label class="checkbox-row"><input type="checkbox" name="ml" checked> ML</label>
+      <label class="checkbox-row"><input type="checkbox" name="fingerprint" checked> Fingerprint</label>
+      <label class="checkbox-row"><input type="checkbox" name="binary" checked> Binary</label>
+    </div>
+
     <button type="submit" class="btn btn-secondary btn-large" id="det-submit">
       <span class="btn-icon-left">🔬</span> Run All Detectors
     </button>
@@ -334,7 +372,72 @@
     </button>
   </form>
 
+  <div class="ctf-actions">
+    <button type="button" class="btn btn-secondary" id="ctf-copy-report">Copy Report</button>
+    <button type="button" class="btn btn-secondary" id="ctf-export-json">Export JSON</button>
+  </div>
+
   <div id="ctf-result" class="result-area" style="display:none"></div>
+</section>
+
+
+<!-- ═══════════════ SURVIVE TAB ═══════════════ -->
+<section class="tab-panel" id="tab-survive">
+  <div class="panel-header">
+    <h1>Platform Survival Check</h1>
+    <p class="panel-subtitle">
+      Simulate social platform recompression locally and verify extraction resilience.
+    </p>
+  </div>
+
+  <form id="survive-form" class="stego-form">
+    <div class="form-group">
+      <label class="form-label" for="survive-carrier">Carrier File</label>
+      <div class="drop-zone" id="survive-carrier-drop">
+        <span class="drop-icon">🖼</span>
+        <span class="drop-text">Drop carrier image or video<br>or <u>click to browse</u></span>
+        <input type="file" id="survive-carrier" name="carrier" accept=".png,.jpg,.jpeg,.bmp,.gif,.webp,.mp4,.webm" class="file-input">
+      </div>
+      <div class="file-info" id="survive-carrier-info"></div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label" for="survive-payload">Payload File</label>
+      <div class="drop-zone" id="survive-payload-drop">
+        <span class="drop-icon">🔏</span>
+        <span class="drop-text">Drop payload file<br>or <u>click to browse</u></span>
+        <input type="file" id="survive-payload" name="payload" class="file-input">
+      </div>
+      <div class="file-info" id="survive-payload-info"></div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label" for="survive-key">Encryption Key</label>
+      <input type="password" id="survive-key" name="key" class="form-input" placeholder="Passphrase">
+    </div>
+
+    <div class="form-group">
+      <label class="form-label" for="survive-target">Target Platform</label>
+      <select id="survive-target" name="target" class="form-select">
+        <option value="twitter">Twitter</option>
+        <option value="instagram">Instagram</option>
+        <option value="telegram">Telegram</option>
+        <option value="discord">Discord</option>
+        <option value="whatsapp">WhatsApp</option>
+        <option value="facebook">Facebook</option>
+        <option value="tiktok">TikTok</option>
+        <option value="linkedin">LinkedIn</option>
+        <option value="reddit">Reddit</option>
+        <option value="signal">Signal</option>
+      </select>
+    </div>
+
+    <button type="submit" class="btn btn-secondary btn-large" id="survive-submit">
+      <span class="btn-icon-left">🧪</span> Run Simulation
+    </button>
+  </form>
+
+  <div id="survive-result" class="result-area" style="display:none"></div>
 </section>
 
 
@@ -363,9 +466,19 @@
       <div class="drop-zone" id="cap-file-drop">
         <span class="drop-icon">📐</span>
         <span class="drop-text">Drop carrier file here<br>or <u>click to browse</u></span>
-        <input type="file" id="cap-file" name="file" accept=".png,.jpg,.jpeg,.bmp,.gif,.webp,.wav,.flac,.mp3,.ogg,.pdf,.docx,.xlsx,.txt" class="file-input">
+        <input type="file" id="cap-file" name="file" accept=".png,.jpg,.jpeg,.bmp,.gif,.webp,.mp4,.webm,.wav,.flac,.mp3,.ogg,.pdf,.docx,.xlsx,.txt" class="file-input">
       </div>
       <div class="file-info" id="cap-file-info"></div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label" for="cap-payload">Optional Payload File</label>
+      <div class="drop-zone" id="cap-payload-drop">
+        <span class="drop-icon">📦</span>
+        <span class="drop-text">Drop payload to calculate utilization percentages<br>or <u>click to browse</u></span>
+        <input type="file" id="cap-payload" name="payload" class="file-input">
+      </div>
+      <div class="file-info" id="cap-payload-info"></div>
     </div>
 
     <div class="form-row">
@@ -374,12 +487,17 @@
         <select id="cap-method" name="method" class="form-select">
           <option value="">Auto-detect</option>
           <option value="lsb">LSB</option>
+          <option value="adaptive-lsb">Adaptive LSB</option>
           <option value="dct">DCT</option>
+          <option value="video-dct">Video DCT</option>
+          <option value="video-motion">Video Motion</option>
+          <option value="fingerprint-lsb">Fingerprint LSB</option>
           <option value="alpha">Alpha</option>
           <option value="palette">Palette</option>
           <option value="audio-lsb">Audio LSB</option>
           <option value="phase">Phase</option>
           <option value="unicode">Unicode</option>
+          <option value="linguistic">Linguistic</option>
           <option value="pdf">PDF</option>
           <option value="docx">DOCX</option>
           <option value="xlsx">XLSX</option>
@@ -395,6 +513,11 @@
       <span class="btn-icon-left">📏</span> Check Capacity
     </button>
   </form>
+
+  <div class="form-group" style="margin-top:12px;">
+    <label class="form-label">Live Method Capacity Table</label>
+    <div id="cap-live-matrix" class="capacity-matrix empty">Drop a carrier to compute capacities across methods.</div>
+  </div>
 
   <div id="capacity-result" class="result-area" style="display:none"></div>
 </section>

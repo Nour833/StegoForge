@@ -125,7 +125,11 @@ class BlindExtractor(BaseDetector):
                     method=self.name,
                     detected=False,
                     confidence=0.0,
-                    details={"skipped": True, "interpretation": "Format not supported or invalid image"},
+                    details={
+                        "skipped": True,
+                        "interpretation": "Format not supported or invalid image",
+                        "error": str(e),
+                    },
                 )
 
             has_alpha = (img.mode == "RGBA")

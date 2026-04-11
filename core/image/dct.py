@@ -46,6 +46,29 @@ class DCTEncoder(BaseEncoder):
         n_blocks = (w // BLOCK) * (h // BLOCK)
         return (n_blocks // 8) - HEADER_SIZE
 
+    def jnd_safe_capacity(self, carrier_bytes: bytes) -> int:
+        """
+        Estimate a conservative perceptual (JND-safe) payload budget.
+
+        This heuristic models that only a subset of mid-frequency coefficients in
+        each 8x8 block can be modified without noticeable artifacts.
+        """
+        img = self._load_jpeg(carrier_bytes)
+        arr = np.array(img.convert("L"), dtype=np.float32)
+        h, w = arr.shape
+
+        usable_bits = 0
+        for row in range(0, h - BLOCK + 1, BLOCK):
+            for col in range(0, w - BLOCK + 1, BLOCK):
+                block = arr[row:row + BLOCK, col:col + BLOCK]
+                coeff = _dct2(block)
+                # Mid-band activity proxy; higher activity tolerates subtle embedding.
+                mid_band = np.abs(coeff[2:6, 2:6]).mean()
+                if mid_band > 8.0:
+                    usable_bits += 1
+
+        return max(0, (usable_bits // 8) - HEADER_SIZE)
+
     def encode(self, carrier_bytes: bytes, payload_bytes: bytes, **kwargs) -> bytes:
         img = self._load_jpeg(carrier_bytes)
         arr = np.array(img, dtype=np.float64)

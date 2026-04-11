@@ -18,6 +18,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
+from rich.align import Align
 from rich.live import Live
 from rich.spinner import Spinner
 from rich.prompt import Prompt, Confirm
@@ -34,6 +35,10 @@ app = typer.Typer(
     rich_markup_mode="rich",
     add_completion=False,
 )
+deadrop_app = typer.Typer(help="Dead drop protocol operations")
+deadrop_keyx_app = typer.Typer(help="Steganographic X25519 key exchange operations")
+deadrop_app.add_typer(deadrop_keyx_app, name="keyx")
+app.add_typer(deadrop_app, name="deadrop")
 console = Console()
 
 # ── Color palette ─────────────────────────────────────────────────────────────
@@ -58,12 +63,72 @@ BANNER = r"""
 """
 
 TAGLINES = [
-    "Hide in Images  ·  Hide in Audio  ·  Hide in Documents",
-    "Detect What Others Hide  ·  Survive Forensics",
+    "Hide in Images  ·  Hide in Audio  ·  Hide in Documents  ·  Hide in Video",
     "AES-256-GCM  ·  Argon2id  ·  Polymorphic Embedding",
-    "Chi-Square  ·  RS Analysis  ·  EXIF Forensics  ·  Blind Extraction",
+    "Chi-Square  ·  RS  ·  EXIF  ·  Blind  ·  ML  ·  Fingerprint  ·  Binary",
     "CTF-Ready  ·  Pipe-Friendly  ·  JSON Output  ·  Zero Compromise",
 ]
+PRIMARY_TAGLINE = "Detect What Others Hide  ·  Survive Forensics"
+
+UI_ANIMATION_ENABLED = os.getenv("STEGOFORGE_FAST_UI", "0") not in ("1", "true", "TRUE", "yes", "YES")
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+        return value if value >= 0 else default
+    except ValueError:
+        return default
+
+
+UI_STAGE_DELAY = _env_float("STEGOFORGE_UI_STAGE_DELAY", 0.45)
+UI_TRANSITION_DELAY = _env_float("STEGOFORGE_UI_TRANSITION_DELAY", 0.55)
+
+
+def _ui_sleep(seconds: float):
+    """Sleep helper that can be disabled for automation or fast startup."""
+    if UI_ANIMATION_ENABLED and sys.stdout.isatty():
+        time.sleep(seconds)
+
+
+def _startup_loading_sequence():
+    """Render a short startup loading animation for the interactive UI."""
+    if not (UI_ANIMATION_ENABLED and sys.stdout.isatty()):
+        return
+
+    stages = [
+        "Loading encoder registry",
+        "Priming detector engines",
+        "Checking protocol modules",
+        "Preparing interactive workspace",
+    ]
+
+    with Progress(
+        SpinnerColumn(style="bright_cyan"),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(bar_width=26, complete_style="bright_cyan"),
+        console=console,
+        transient=True,
+    ) as progress:
+        task = progress.add_task("Booting StegoForge", total=len(stages))
+        for stage in stages:
+            progress.update(task, description=stage)
+            _ui_sleep(UI_STAGE_DELAY)
+            progress.advance(task)
+
+    console.print(Align.center(f"[{C_SUCCESS}]Ready to forge covert channels.[/{C_SUCCESS}]"))
+    console.print()
+
+
+def _menu_transition(action: str):
+    """Small transition spinner before opening a menu action."""
+    if not (UI_ANIMATION_ENABLED and sys.stdout.isatty()):
+        return
+    with console.status(f"[{C_INFO}]Opening {action}...[/{C_INFO}]", spinner="dots"):
+        _ui_sleep(UI_TRANSITION_DELAY)
 
 
 def print_banner():
@@ -76,31 +141,50 @@ def print_banner():
 
     console.print(banner_text)
 
-    # Animated tagline
-    tagline = TAGLINES[int(time.time()) % len(TAGLINES)]
-    console.print(f"  [dim cyan]❯[/dim cyan] [italic bright_white]{tagline}[/italic bright_white]\n")
+    # Always show the primary signature line in full.
+    console.print(
+        Align.center(
+            f"[dim cyan]❯[/dim cyan] [italic bright_white]{PRIMARY_TAGLINE}[/italic bright_white]"
+        )
+    )
+    if UI_ANIMATION_ENABLED and sys.stdout.isatty():
+        _ui_sleep(0.18)
+        highlight = TAGLINES[int(time.time()) % len(TAGLINES)]
+        console.print(Align.center(f"[dim]{highlight}[/dim]"))
+    console.print()
 
     # Version + stats bar
     info_text = (
-        f"[{C_DIM}]v1.0.0  ·  12 encoding methods  ·  "
-        f"4 detection engines  ·  AES-256-GCM  ·  CTF-Ready[/{C_DIM}]"
+        f"[{C_DIM}]v1.0.0  ·  20 encoding methods  ·  "
+        f"11 detection engines  ·  AES-256-GCM  ·  CTF-Ready[/{C_DIM}]"
     )
-    console.print(f"  {info_text}\n")
+    console.print(Align.center(info_text))
+    console.print(Align.center(f"[{C_GOLD}]Made by nour833[/{C_GOLD}]"))
+    console.print()
 
 
 # ── Method registry ───────────────────────────────────────────────────────────
 ENCODE_METHODS = {
     "lsb":          ("Image",    "LSB — Least Significant Bit in image pixels (PNG/BMP)"),
+    "adaptive-lsb": ("Image",    "Adaptive LSB — content-aware embedding, recommended for forensic resistance"),
     "dct":          ("Image",    "DCT — Frequency domain injection (JPEG)"),
+    "video-dct":    ("Video",    "Video DCT — keyframe-focused embedding (MP4/WebM)"),
+    "video-motion": ("Video",    "Video Motion — P-frame motion-style embedding (MP4)"),
     "alpha":        ("Image",    "Alpha — Hide in transparency channel (PNG/WebP)"),
     "palette":      ("Image",    "Palette — GIF/indexed PNG color reordering"),
+    "fingerprint-lsb": ("Image", "PRNU-aware LSB embedding for fingerprint preservation"),
     "audio-lsb":    ("Audio",    "Audio LSB — PCM sample bit manipulation (WAV/FLAC)"),
     "phase":        ("Audio",    "Phase — Segment phase coding, MP3-tolerant"),
     "spectrogram":  ("Audio",    "Spectrogram — Embed visible image/text in audio spectrum"),
     "unicode":      ("Document", "Unicode — Zero-width character encoding (TXT)"),
+    "linguistic":   ("Document", "Linguistic — synonym-based natural text steganography"),
     "pdf":          ("Document", "PDF — Stream/metadata injection (PDF)"),
     "docx":         ("Document", "DOCX — Custom XML stream injection (DOCX)"),
     "xlsx":         ("Document", "XLSX — Custom XML stream injection (XLSX)"),
+    "elf":          ("Binary",   "ELF — section slack and notes embedding (CLI only)"),
+    "pe":           ("Binary",   "PE — section slack and overlay embedding (CLI only)"),
+    "tcp-covert":   ("Network",  "TCP covert channel (CLI only, authorized use only)"),
+    "timing-covert":("Network",  "Timing covert channel (CLI only, authorized use only)"),
 }
 
 DECODE_METHODS = {k: v for k, v in ENCODE_METHODS.items()}
@@ -109,6 +193,7 @@ EXT_TO_METHOD = {
     ".png":  "lsb", ".bmp": "lsb", ".tiff": "lsb",
     ".jpg":  "dct", ".jpeg": "dct",
     ".gif":  "palette",
+    ".mp4":  "video-dct", ".webm": "video-dct",
     ".wav":  "audio-lsb", ".flac": "audio-lsb",
     ".mp3":  "audio-lsb", ".ogg": "audio-lsb",
     ".txt":  "unicode",
@@ -116,6 +201,7 @@ EXT_TO_METHOD = {
     ".docx": "docx",
     ".xlsx": "xlsx",
     ".webp": "alpha",
+    ".elf":  "elf", ".exe": "pe", ".dll": "pe",
 }
 
 
@@ -129,15 +215,27 @@ def get_encoder(method: str):
     if method == "lsb":
         from core.image.lsb import LSBEncoder
         return LSBEncoder()
+    elif method == "adaptive-lsb":
+        from core.image.adaptive import AdaptiveLSBEncoder
+        return AdaptiveLSBEncoder()
     elif method == "dct":
         from core.image.dct import DCTEncoder
         return DCTEncoder()
+    elif method == "video-dct":
+        from core.video.dct import VideoDCTEncoder
+        return VideoDCTEncoder()
+    elif method == "video-motion":
+        from core.video.motion import VideoMotionEncoder
+        return VideoMotionEncoder()
     elif method == "alpha":
         from core.image.alpha import AlphaEncoder
         return AlphaEncoder()
     elif method == "palette":
         from core.image.palette import PaletteEncoder
         return PaletteEncoder()
+    elif method == "fingerprint-lsb":
+        from core.image.fingerprint import FingerprintEncoder
+        return FingerprintEncoder()
     elif method == "audio-lsb":
         from core.audio.lsb import AudioLSBEncoder
         return AudioLSBEncoder()
@@ -150,12 +248,27 @@ def get_encoder(method: str):
     elif method == "unicode":
         from core.document.unicode_ws import UnicodeWSEncoder
         return UnicodeWSEncoder()
+    elif method == "linguistic":
+        from core.document.linguistic import LinguisticEncoder
+        return LinguisticEncoder()
     elif method == "pdf":
         from core.document.pdf import PDFEncoder
         return PDFEncoder()
     elif method in ("docx", "xlsx", "office"):
         from core.document.office import OfficeEncoder
         return OfficeEncoder()
+    elif method == "elf":
+        from core.binary.elf import ELFEncoder
+        return ELFEncoder()
+    elif method == "pe":
+        from core.binary.pe import PEEncoder
+        return PEEncoder()
+    elif method == "tcp-covert":
+        from core.network.tcp import TCPCovertEncoder
+        return TCPCovertEncoder()
+    elif method == "timing-covert":
+        from core.network.timing import TimingCovertEncoder
+        return TimingCovertEncoder()
     else:
         raise ValueError(f"Unknown method: {method}")
 
@@ -165,6 +278,53 @@ def get_output_path(carrier_path: str, output: str | None, suffix: str = "_stego
     if output:
         return Path(output)
     return p.with_stem(p.stem + suffix)
+
+
+def _is_image_ext(ext: str) -> bool:
+    return ext.lower() in {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tiff"}
+
+
+def _is_audio_ext(ext: str) -> bool:
+    return ext.lower() in {".wav", ".flac", ".mp3", ".ogg"}
+
+
+def _is_video_ext(ext: str) -> bool:
+    return ext.lower() in {".mp4", ".webm"}
+
+
+def _is_document_ext(ext: str) -> bool:
+    return ext.lower() in {".txt", ".pdf", ".docx", ".xlsx"}
+
+
+def _is_binary_ext(ext: str) -> bool:
+    return ext.lower() in {".elf", ".exe", ".dll", ".bin"}
+
+
+def _resize_carrier_if_needed(carrier_bytes: bytes, ext: str, max_dim: int) -> tuple[bytes, tuple[int, int] | None, tuple[int, int] | None]:
+    if not _is_image_ext(ext) or max_dim <= 0:
+        return carrier_bytes, None, None
+
+    from PIL import Image
+    import io
+
+    img = Image.open(io.BytesIO(carrier_bytes))
+    if max(img.size) <= max_dim:
+        return carrier_bytes, img.size, img.size
+
+    ratio = max_dim / float(max(img.size))
+    resized = (max(1, int(img.size[0] * ratio)), max(1, int(img.size[1] * ratio)))
+    out = img.convert("RGB").resize(resized, Image.LANCZOS)
+
+    buf = io.BytesIO()
+    if ext.lower() in (".jpg", ".jpeg"):
+        out.save(buf, format="JPEG", quality=95, subsampling=0)
+    elif ext.lower() == ".webp":
+        out.save(buf, format="WEBP", lossless=True)
+    elif ext.lower() == ".bmp":
+        out.save(buf, format="BMP")
+    else:
+        out.save(buf, format="PNG")
+    return buf.getvalue(), img.size, resized
 
 
 # ── Core operation helpers ────────────────────────────────────────────────────
@@ -178,9 +338,22 @@ def op_encode(
     depth: int,
     decoy: str | None,
     decoy_key: str | None,
+    wet_paper: bool,
+    target: str | None,
+    test_survival: bool,
+    preserve_fingerprint: bool,
+    cover: str | None,
+    topic: str | None,
+    llm_model: str | None,
     json_mode: bool,
+    target_ip: str | None = None,
+    target_port: int | None = None,
+    listen_ip: str | None = None,
+    listen_port: int | None = None,
+    channel: str | None = None,
+    timing_delta: int = 50,
 ) -> dict:
-    carrier_path = Path(carrier)
+    carrier_path = Path(cover) if cover else Path(carrier)
     payload_path = Path(payload)
 
     if not carrier_path.exists():
@@ -191,7 +364,19 @@ def op_encode(
     carrier_bytes = carrier_path.read_bytes()
     payload_bytes = payload_path.read_bytes()
 
-    method = method or auto_detect_method(carrier)
+    method = method or auto_detect_method(str(carrier_path))
+
+    profile = None
+    if target:
+        from detect.survival import suggest_encode_profile
+        profile = suggest_encode_profile(target)
+        if method is None or method == auto_detect_method(str(carrier_path)):
+            method = profile.preferred_method
+        wet_paper = wet_paper or profile.requires_wet_paper
+
+    if preserve_fingerprint and method in ("lsb", "adaptive-lsb"):
+        method = "fingerprint-lsb"
+
     encoder = get_encoder(method)
 
     # Encrypt payload
@@ -199,21 +384,52 @@ def op_encode(
     if decoy and decoy_key:
         from core.crypto import decoy as decoy_mod
         decoy_payload = Path(decoy).read_bytes()
-        decoy_enc = aes.encrypt(decoy_payload, decoy_key)
-        real_enc = aes.encrypt(payload_bytes, key)
-        embed_bytes = decoy_mod.SEPARATOR.join([decoy_enc, real_enc])
-        # Actually use proper dual encode
         embed_bytes = decoy_mod.encode_dual(decoy_payload, decoy_key, payload_bytes, key)
     else:
         embed_bytes = aes.encrypt(payload_bytes, key)
 
-    # Build kwargs before capacity check so audio ext is included
+    if wet_paper:
+        from core.image.wetpaper import encode_wet_paper
+        embed_bytes = encode_wet_paper(embed_bytes)
+
     ext = carrier_path.suffix.lower()
+    resized_from = resized_to = None
+    if profile and _is_image_ext(ext):
+        carrier_bytes, resized_from, resized_to = _resize_carrier_if_needed(
+            carrier_bytes,
+            ext,
+            profile.max_dimension,
+        )
+
+    # Build kwargs before capacity check so audio ext is included
     kwargs = {"depth": depth, "key": key}
-    if method in ("audio-lsb", "phase", "spectrogram"):
+    if method in ("audio-lsb", "phase", "spectrogram", "video-dct", "video-motion"):
         kwargs["ext"] = ext
     if method in ("docx", "xlsx", "office"):
         kwargs["filename"] = str(carrier_path)
+    if method == "linguistic":
+        kwargs["topic"] = topic
+        kwargs["llm_model"] = llm_model
+    if method in ("tcp-covert", "timing-covert"):
+        kwargs["target_ip"] = target_ip
+        kwargs["target_port"] = target_port
+        kwargs["listen_ip"] = listen_ip
+        kwargs["listen_port"] = listen_port
+        kwargs["channel"] = channel or ("timing" if method == "timing-covert" else "ip_id")
+        kwargs["timing_delta"] = timing_delta
+        console.print(
+            f"[{C_WARN}]Legal notice:[/{C_WARN}] covert network channels must only be used on systems you own or are explicitly authorized to test."
+        )
+    if method == "fingerprint-lsb" and not json_mode:
+        last_progress = {"pct": -1}
+
+        def _progress(done: int, total: int):
+            pct = int((done / max(1, total)) * 100)
+            if pct >= last_progress["pct"] + 10 or pct == 100:
+                last_progress["pct"] = pct
+                console.print(f"[{C_INFO}]Fingerprint-preserving embed progress: {pct}%[/{C_INFO}]")
+
+        kwargs["progress_callback"] = _progress
 
     # Capacity check — pass same kwargs so audio encoders receive ext
     cap_kwargs = {k: v for k, v in kwargs.items() if k != "key"}  # capacity doesn't need key
@@ -241,7 +457,52 @@ def op_encode(
         "output": str(out_path),
         "depth": depth,
         "decoy_mode": bool(decoy and decoy_key),
+        "wet_paper": wet_paper,
+        "preserve_fingerprint": preserve_fingerprint,
     }
+
+    if profile:
+        result["target_profile"] = {
+            "platform": profile.name,
+            "notes": profile.notes,
+            "requires_wet_paper": profile.requires_wet_paper,
+        }
+    if resized_from and resized_to and resized_from != resized_to:
+        result["resized"] = {"from": resized_from, "to": resized_to}
+
+    if test_survival and profile:
+        from detect.survival import simulate_platform_pipeline
+        from core.crypto import aes as aes_mod
+        from core.crypto import decoy as decoy_mod
+        from core.image.wetpaper import decode_wet_paper, is_wet_paper_blob
+
+        sim_bytes, sim_meta = simulate_platform_pipeline(stego_bytes, out_path.name, profile)
+        survived = False
+        corrected = 0
+        sim_error = None
+        try:
+            sim_raw = encoder.decode(sim_bytes, **kwargs)
+            if wet_paper or is_wet_paper_blob(sim_raw):
+                sim_raw, corrected, _ = decode_wet_paper(sim_raw)
+            if decoy and decoy_key:
+                try:
+                    decoy_mod.decode_dual(sim_raw, key)
+                except ValueError:
+                    aes_mod.decrypt(sim_raw, key)
+            else:
+                aes_mod.decrypt(sim_raw, key)
+            survived = True
+        except Exception as exc:
+            sim_error = str(exc)
+
+        result["survival_test"] = {
+            "target": profile.name,
+            "survived": survived,
+            "corrected_bits": corrected,
+            "simulation": sim_meta,
+            "error": sim_error,
+        }
+
     return result
 
 
@@ -250,7 +511,14 @@ def op_decode(
     key: str,
     output: str | None,
     method: str | None,
+    wet_paper: bool,
     json_mode: bool,
+    target_ip: str | None = None,
+    target_port: int | None = None,
+    listen_ip: str | None = None,
+    listen_port: int | None = None,
+    channel: str | None = None,
+    timing_delta: int = 50,
 ) -> dict:
     file_path = Path(file)
     if not file_path.exists():
@@ -263,12 +531,17 @@ def op_decode(
         suggested = auto_detect_method(file)
         if suggested in ("audio-lsb", "phase", "spectrogram"):
             methods_to_try = ["audio-lsb", "phase", "spectrogram"]
-        elif suggested in ("lsb", "dct", "alpha", "palette"):
-            methods_to_try = ["lsb", "dct", "alpha", "palette"]
+        elif suggested in ("video-dct", "video-motion"):
+            methods_to_try = ["video-dct", "video-motion"]
+        elif suggested in ("lsb", "adaptive-lsb", "dct", "alpha", "palette", "fingerprint-lsb"):
+            methods_to_try = ["adaptive-lsb", "lsb", "fingerprint-lsb", "dct", "alpha", "palette"]
+        elif suggested in ("elf", "pe"):
+            methods_to_try = ["elf", "pe"]
         else:
             methods_to_try = [suggested]
 
     from core.crypto import aes, decoy as decoy_mod
+    from core.image.wetpaper import decode_wet_paper, is_wet_paper_blob
 
     payload = None
     last_error = None
@@ -276,22 +549,45 @@ def op_decode(
     for try_method in methods_to_try:
         encoder = get_encoder(try_method)
         kwargs = {"key": key}
-        if try_method in ("audio-lsb", "phase", "spectrogram"):
+        if try_method in ("audio-lsb", "phase", "spectrogram", "video-dct", "video-motion"):
             kwargs["ext"] = ext
         if try_method in ("docx", "xlsx", "office"):
             kwargs["filename"] = str(file_path)
-            
-        for depth in [1, 2, 3, 4]:
+        if try_method in ("tcp-covert", "timing-covert"):
+            kwargs["target_ip"] = target_ip
+            kwargs["target_port"] = target_port
+            kwargs["listen_ip"] = listen_ip
+            kwargs["listen_port"] = listen_port
+            kwargs["channel"] = channel
+            kwargs["timing_delta"] = timing_delta
+            console.print(
+                f"[{C_WARN}]Legal notice:[/{C_WARN}] covert network channels must only be used on systems you own or are explicitly authorized to test."
+            )
+
+        depth_methods = {"lsb", "adaptive-lsb", "fingerprint-lsb", "audio-lsb"}
+        depths = [1, 2, 3, 4] if try_method in depth_methods else [1]
+
+        for depth in depths:
             try:
                 kwargs["depth"] = depth
                 raw_bytes = encoder.decode(stego_bytes, **kwargs)
+
+                corrected_bits = 0
+                wet_used = False
+                if wet_paper or is_wet_paper_blob(raw_bytes):
+                    raw_bytes, corrected_bits, wet_used = decode_wet_paper(raw_bytes)
+
                 try:
                     payload = decoy_mod.decode_dual(raw_bytes, key)
                     method = try_method
+                    wet_paper = wet_used
+                    wet_corrected_bits = corrected_bits
                     break
                 except ValueError:
                     payload = aes.decrypt(raw_bytes, key)
                     method = try_method
+                    wet_paper = wet_used
+                    wet_corrected_bits = corrected_bits
                     break
             except ValueError as e:
                 last_error = str(e)
@@ -318,6 +614,8 @@ def op_decode(
         "file": str(file_path),
         "payload_size": len(payload),
         "output": str(out_path),
+        "wet_paper": bool(wet_paper),
+        "wet_corrected_bits": int(locals().get("wet_corrected_bits", 0)),
     }
     return result
 
@@ -328,6 +626,9 @@ def op_detect(
     rs: bool,
     exif: bool,
     blind: bool,
+    ml: bool,
+    fingerprint: bool,
+    binary: bool,
     all_detectors: bool,
     json_mode: bool,
 ) -> dict:
@@ -337,33 +638,96 @@ def op_detect(
 
     file_bytes = file_path.read_bytes()
     filename = file_path.name
+    ext = file_path.suffix.lower()
     results = []
 
-    if chi2 or all_detectors:
+    is_image = _is_image_ext(ext)
+    is_audio = _is_audio_ext(ext)
+    is_video = _is_video_ext(ext)
+    is_document = _is_document_ext(ext)
+    is_pdf = ext == ".pdf"
+    is_binary = _is_binary_ext(ext) or file_bytes.startswith(b"\x7fELF") or file_bytes.startswith(b"MZ")
+    any_requested = any([chi2, rs, exif, blind, ml, fingerprint, binary, all_detectors])
+
+    if (chi2 or all_detectors) and is_image:
         from detect.chi2 import Chi2Detector
         results.append(Chi2Detector().analyze(file_bytes, filename))
-    if rs or all_detectors:
+    if (rs or all_detectors) and is_image:
         from detect.rs import RSDetector
         results.append(RSDetector().analyze(file_bytes, filename))
     if exif or all_detectors:
         from detect.exif import EXIFDetector
         results.append(EXIFDetector().analyze(file_bytes, filename))
     if blind or all_detectors:
-        from detect.blind import BlindExtractor
-        results.append(BlindExtractor().analyze(file_bytes, filename))
+        if is_video:
+            results.append(_VideoAudioBlindDetector().analyze(file_bytes, filename))
+        else:
+            from detect.blind import BlindExtractor
+            results.append(BlindExtractor().analyze(file_bytes, filename))
+    if (fingerprint or all_detectors) and is_image:
+        from detect.fingerprint import FingerprintDetector
+        results.append(FingerprintDetector().analyze(file_bytes, filename))
+    if (binary or all_detectors) and is_binary:
+        from detect.binary import BinaryDetector
+        results.append(BinaryDetector().analyze(file_bytes, filename))
+    if (ml or all_detectors) and is_image:
+        from detect.ml_steganalysis import MLSteganalysisDetector
+        classical = {
+            "chi2": next((r.confidence for r in results if r.method == "chi2"), 0.0),
+            "rs": next((r.confidence for r in results if r.method == "rs"), 0.0),
+        }
+        results.append(MLSteganalysisDetector().analyze(file_bytes, filename, classical=classical))
+    if (all_detectors or any_requested) and is_audio:
+        from detect.audio_anomaly import AudioAnomalyDetector
+        results.append(AudioAnomalyDetector().analyze(file_bytes, filename))
+    if (all_detectors or any_requested) and is_pdf:
+        from detect.pdf_anomaly import PDFAnomalyDetector
+        results.append(PDFAnomalyDetector().analyze(file_bytes, filename))
+    if (all_detectors or any_requested) and is_document and not is_pdf:
+        from detect.document_anomaly import DocumentAnomalyDetector
+        results.append(DocumentAnomalyDetector().analyze(file_bytes, filename))
+    if (all_detectors or any_requested) and is_video:
+        from detect.video_anomaly import VideoAnomalyDetector
+        results.append(VideoAnomalyDetector().analyze(file_bytes, filename))
 
     if not results:
-        # Default: run all
-        from detect.chi2 import Chi2Detector
-        from detect.rs import RSDetector
+        # Default: run all applicable detectors for the file type
         from detect.exif import EXIFDetector
         from detect.blind import BlindExtractor
-        results = [
-            Chi2Detector().analyze(file_bytes, filename),
-            RSDetector().analyze(file_bytes, filename),
-            EXIFDetector().analyze(file_bytes, filename),
-            BlindExtractor().analyze(file_bytes, filename),
-        ]
+        results = [EXIFDetector().analyze(file_bytes, filename)]
+        if is_video:
+            results.append(_VideoAudioBlindDetector().analyze(file_bytes, filename))
+        else:
+            results.append(BlindExtractor().analyze(file_bytes, filename))
+        if is_image:
+            from detect.chi2 import Chi2Detector
+            from detect.rs import RSDetector
+            from detect.fingerprint import FingerprintDetector
+            from detect.ml_steganalysis import MLSteganalysisDetector
+
+            chi2_r = Chi2Detector().analyze(file_bytes, filename)
+            rs_r = RSDetector().analyze(file_bytes, filename)
+            results.extend([chi2_r, rs_r, FingerprintDetector().analyze(file_bytes, filename)])
+            results.append(MLSteganalysisDetector().analyze(
+                file_bytes,
+                filename,
+                classical={"chi2": chi2_r.confidence, "rs": rs_r.confidence},
+            ))
+        if is_binary:
+            from detect.binary import BinaryDetector
+            results.append(BinaryDetector().analyze(file_bytes, filename))
+        if is_audio:
+            from detect.audio_anomaly import AudioAnomalyDetector
+            results.append(AudioAnomalyDetector().analyze(file_bytes, filename))
+        if is_pdf:
+            from detect.pdf_anomaly import PDFAnomalyDetector
+            results.append(PDFAnomalyDetector().analyze(file_bytes, filename))
+        if is_document and not is_pdf:
+            from detect.document_anomaly import DocumentAnomalyDetector
+            results.append(DocumentAnomalyDetector().analyze(file_bytes, filename))
+        if is_video:
+            from detect.video_anomaly import VideoAnomalyDetector
+            results.append(VideoAnomalyDetector().analyze(file_bytes, filename))
 
     return {
         "status": "success",
@@ -382,27 +746,92 @@ def op_ctf(file: str, json_mode: bool) -> dict:
     file_bytes = file_path.read_bytes()
     filename = file_path.name
     file_size = len(file_bytes)
+    ext = file_path.suffix.lower()
 
-    from detect.chi2 import Chi2Detector
-    from detect.rs import RSDetector
     from detect.exif import EXIFDetector
     from detect.blind import BlindExtractor
 
-    detectors = [Chi2Detector(), RSDetector(), EXIFDetector(), BlindExtractor()]
+    is_image = _is_image_ext(ext)
+    is_audio = _is_audio_ext(ext)
+    is_video = _is_video_ext(ext)
+    is_binary = _is_binary_ext(ext) or file_bytes.startswith(b"\x7fELF") or file_bytes.startswith(b"MZ")
+
+    detectors = []
+    if is_image:
+        from detect.chi2 import Chi2Detector
+        from detect.rs import RSDetector
+        from detect.fingerprint import FingerprintDetector
+
+        detectors.extend([Chi2Detector(), RSDetector(), FingerprintDetector()])
+    else:
+        detectors.extend([
+            _SkippedDetector("chi2", "Image-only chi-square detector skipped for this file type"),
+            _SkippedDetector("rs", "Image-only RS detector skipped for this file type"),
+        ])
+
+    if is_video:
+        detectors.extend([EXIFDetector(), _VideoAudioBlindDetector()])
+    else:
+        detectors.extend([EXIFDetector(), BlindExtractor()])
+
+    if is_audio:
+        from detect.audio_anomaly import AudioAnomalyDetector
+        detectors.append(AudioAnomalyDetector())
+    if ext == ".pdf":
+        from detect.pdf_anomaly import PDFAnomalyDetector
+        detectors.append(PDFAnomalyDetector())
+    if _is_document_ext(ext) and ext != ".pdf":
+        from detect.document_anomaly import DocumentAnomalyDetector
+        detectors.append(DocumentAnomalyDetector())
+
+    if is_image:
+        from detect.ml_steganalysis import MLSteganalysisDetector
+        detectors.append(MLSteganalysisDetector())
+    if is_binary:
+        from detect.binary import BinaryDetector
+        detectors.append(BinaryDetector())
+    if is_video:
+        from detect.video_anomaly import VideoAnomalyDetector
+        detectors.append(VideoAnomalyDetector())
+
     results = []
     for det in detectors:
-        results.append(det.analyze(file_bytes, filename))
+        if getattr(det, "name", "") == "ml":
+            chi2_conf = next((r.confidence for r in results if r.method == "chi2"), 0.0)
+            rs_conf = next((r.confidence for r in results if r.method == "rs"), 0.0)
+            results.append(det.analyze(file_bytes, filename, classical={"chi2": chi2_conf, "rs": rs_conf}))
+        else:
+            results.append(det.analyze(file_bytes, filename))
 
     # Save extracted payloads from blind extractor
     saved_files = []
     for r in results:
-        if r.extracted_payload and r.method == "blind":
+        if r.extracted_payload and r.method in ("blind", "blind-audio"):
             save_path = file_path.parent / f"extracted_{file_path.stem}.bin"
             save_path.write_bytes(r.extracted_payload)
             saved_files.append(str(save_path))
 
     overall_confidence = max((r.confidence for r in results), default=0.0)
     any_detected = any(r.detected for r in results)
+
+    ctf_notes = []
+    if is_image:
+        chi2_r = next((r for r in results if r.method == "chi2"), None)
+        rs_r = next((r for r in results if r.method == "rs"), None)
+        if chi2_r and rs_r and chi2_r.confidence < 0.3 and rs_r.confidence < 0.3:
+            ctf_notes.append(
+                "Clean chi-square/RS scores do not rule out adaptive embedding; run ML analysis when available."
+            )
+    if is_audio:
+        ctf_notes.append("Audio file detected: image-only detectors were labeled SKIPPED and audio anomaly scan was included.")
+    if is_video:
+        ctf_notes.append("Video file detected: chi-square/RS are skipped and video anomaly scan is included.")
+    if is_binary:
+        ctf_notes.append("Binary file detected: binary slack/entropy analysis included.")
+    if ext == ".pdf":
+        ctf_notes.append("PDF file detected: PDF structural anomaly scan included.")
+    if _is_document_ext(ext) and ext != ".pdf":
+        ctf_notes.append("Document file detected: Office/text anomaly scan included.")
 
     return {
         "status": "success",
@@ -412,6 +841,7 @@ def op_ctf(file: str, json_mode: bool) -> dict:
         "overall_confidence": round(overall_confidence, 4),
         "results": [_result_to_dict(r) for r in results],
         "saved_payloads": saved_files,
+        "notes": ctf_notes,
     }
 
 
@@ -426,14 +856,14 @@ def op_capacity(carrier: str, method: str | None, depth: int) -> dict:
 
     ext = carrier_path.suffix.lower()
     kwargs = {"depth": depth}
-    if method in ("audio-lsb", "phase", "spectrogram"):
+    if method in ("audio-lsb", "phase", "spectrogram", "video-dct", "video-motion"):
         kwargs["ext"] = ext
     if method in ("docx", "xlsx", "office"):
         kwargs["filename"] = str(carrier_path)
 
     cap = encoder.capacity(carrier_bytes, **kwargs)
 
-    return {
+    result = {
         "status": "success",
         "carrier": str(carrier_path),
         "method": method,
@@ -442,6 +872,125 @@ def op_capacity(carrier: str, method: str | None, depth: int) -> dict:
         "capacity_kb": round(cap / 1024, 2),
         "capacity_mb": round(cap / (1024 * 1024), 4),
     }
+
+    if method == "dct":
+        try:
+            jnd = encoder.jnd_safe_capacity(carrier_bytes)
+            result["jnd_safe_dct_capacity"] = {
+                "bytes": jnd,
+                "kb": round(jnd / 1024, 2),
+                "note": "JND-safe DCT capacity estimates perceptually conservative embedding budget",
+            }
+        except Exception:
+            pass
+
+    if method in ("video-dct", "video-motion"):
+        try:
+            import av  # type: ignore
+            import tempfile
+            from pathlib import Path as _P
+
+            with tempfile.NamedTemporaryFile(suffix=ext or ".mp4", delete=False) as tmp:
+                tmp.write(carrier_bytes)
+                tmp.flush()
+                path = tmp.name
+            container = av.open(path)
+            stream = container.streams.video[0]
+            frame_count = 0
+            keyframes = 0
+            for frame in container.decode(video=0):
+                frame_count += 1
+                if getattr(frame, "key_frame", False):
+                    keyframes += 1
+            container.close()
+            _P(path).unlink(missing_ok=True)
+            duration_sec = float(stream.duration * float(stream.time_base)) if stream.duration else 0.0
+            result["video_context"] = {
+                "duration_seconds": round(duration_sec, 3),
+                "frames": frame_count,
+                "keyframes": keyframes,
+                "capacity_note": f"up to {round(cap / 1024, 2)} KB across {keyframes} keyframes",
+            }
+        except Exception:
+            pass
+
+    return result
+
+
+class _SkippedDetector:
+    def __init__(self, name: str, reason: str):
+        self.name = name
+        self._reason = reason
+
+    def analyze(self, file_bytes: bytes, filename: str = ""):
+        from detect.base import DetectionResult
+        return DetectionResult(
+            method=self.name,
+            detected=False,
+            confidence=0.0,
+            details={"skipped": True, "interpretation": self._reason},
+        )
+
+
+class _VideoAudioBlindDetector:
+    name = "blind-audio"
+
+    def analyze(self, file_bytes: bytes, filename: str = ""):
+        import subprocess
+        import tempfile
+
+        from detect.blind import BlindExtractor
+        from detect.base import DetectionResult
+        from core.audio._convert import _ffmpeg_cmd
+
+        ffmpeg_cmd = _ffmpeg_cmd()
+        if not ffmpeg_cmd:
+            return DetectionResult(
+                method=self.name,
+                detected=False,
+                confidence=0.0,
+                details={
+                    "skipped": True,
+                    "interpretation": "ffmpeg unavailable for video audio-track extraction",
+                },
+            )
+
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as in_tmp:
+            in_tmp.write(file_bytes)
+            in_tmp.flush()
+            in_path = in_tmp.name
+
+        try:
+            proc = subprocess.run(
+                [
+                    ffmpeg_cmd,
+                    "-y",
+                    "-i",
+                    in_path,
+                    "-vn",
+                    "-f",
+                    "wav",
+                    "pipe:1",
+                ],
+                capture_output=True,
+                timeout=30,
+            )
+            if proc.returncode != 0 or not proc.stdout:
+                return DetectionResult(
+                    method=self.name,
+                    detected=False,
+                    confidence=0.0,
+                    details={
+                        "skipped": True,
+                        "interpretation": "Audio track extraction failed for video blind analysis",
+                    },
+                )
+
+            r = BlindExtractor().analyze(proc.stdout, "video_audio.wav")
+            r.method = self.name
+            return r
+        finally:
+            Path(in_path).unlink(missing_ok=True)
 
 
 def _result_to_dict(result) -> dict:
@@ -458,6 +1007,24 @@ def _result_to_dict(result) -> dict:
 # ── Rich output helpers ───────────────────────────────────────────────────────
 
 def print_encode_result(result: dict):
+    extra_lines = []
+    if result.get("wet_paper"):
+        extra_lines.append("  [dim]Wet Paper :[/dim]  Enabled (Reed-Solomon redundancy active)")
+    if result.get("preserve_fingerprint"):
+        extra_lines.append("  [dim]Fingerprint:[/dim]  Preservation mode active (slightly reduced effective capacity)")
+    if result.get("target_profile"):
+        t = result["target_profile"]
+        extra_lines.append(f"  [dim]Target    :[/dim]  {t['platform']} ({t['notes']})")
+    if result.get("resized"):
+        r = result["resized"]
+        extra_lines.append(f"  [dim]Resized   :[/dim]  {r['from']} -> {r['to']}")
+    if result.get("survival_test"):
+        st = result["survival_test"]
+        status = "PASS" if st.get("survived") else "FAIL"
+        extra_lines.append(
+            f"  [dim]Survival  :[/dim]  {status} ({st.get('target')}, corrected bits={st.get('corrected_bits', 0)})"
+        )
+
     panel_content = (
         f"[{C_SUCCESS}]✓ Payload successfully embedded[/{C_SUCCESS}]\n\n"
         f"  [dim]Method    :[/dim]  [{C_ACCENT}]{result['method'].upper()}[/{C_ACCENT}]\n"
@@ -469,17 +1036,24 @@ def print_encode_result(result: dict):
         f"  [dim]Depth     :[/dim]  {result['depth']} bit(s)\n"
         f"  [dim]Decoy Mode:[/dim]  {'Enabled ✓' if result['decoy_mode'] else 'Disabled'}"
     )
+    if extra_lines:
+        panel_content += "\n" + "\n".join(extra_lines)
     console.print(Panel(panel_content, title=f"[{C_TITLE}]StegoForge — Encode Result[/{C_TITLE}]",
                         border_style="cyan", padding=(1, 2)))
 
 
 def print_decode_result(result: dict):
+    wet_line = ""
+    if result.get("wet_paper"):
+        wet_line = f"\n  [dim]Wet Paper :[/dim]  Enabled (corrected bits: {result.get('wet_corrected_bits', 0)})"
+
     panel_content = (
         f"[{C_SUCCESS}]✓ Payload successfully extracted & decrypted[/{C_SUCCESS}]\n\n"
         f"  [dim]Method    :[/dim]  [{C_ACCENT}]{result['method'].upper()}[/{C_ACCENT}]\n"
         f"  [dim]Input     :[/dim]  {result['file']}\n"
         f"  [dim]Output    :[/dim]  [{C_SUCCESS}]{result['output']}[/{C_SUCCESS}]\n"
         f"  [dim]Payload   :[/dim]  {result['payload_size']:,} bytes"
+        f"{wet_line}"
     )
     console.print(Panel(panel_content, title=f"[{C_TITLE}]StegoForge — Decode Result[/{C_TITLE}]",
                         border_style="green", padding=(1, 2)))
@@ -513,6 +1087,11 @@ def print_ctf_report(report: dict):
     for r in report["results"]:
         _print_single_result(r)
 
+    if report.get("notes"):
+        console.print(f"\n[{C_WARN}]CTF Notes:[/{C_WARN}]")
+        for note in report["notes"]:
+            console.print(f"  - {note}")
+
     if report["saved_payloads"]:
         console.print(f"\n[{C_SUCCESS}]Extracted payloads saved:[/{C_SUCCESS}]")
         for path in report["saved_payloads"]:
@@ -529,6 +1108,21 @@ def print_capacity_result(result: dict):
         f"    [{C_GOLD}]{result['capacity_kb']:>12.2f}[/{C_GOLD}] KB\n"
         f"    [{C_GOLD}]{result['capacity_mb']:>12.4f}[/{C_GOLD}] MB"
     )
+    if result.get("jnd_safe_dct_capacity"):
+        j = result["jnd_safe_dct_capacity"]
+        panel_content += (
+            f"\n\n  [{C_INFO}]JND-safe DCT capacity:[/{C_INFO}]\n"
+            f"    {j['bytes']:,} bytes ({j['kb']} KB)\n"
+            f"    [dim]{j['note']}[/dim]"
+        )
+    if result.get("video_context"):
+        v = result["video_context"]
+        panel_content += (
+            f"\n\n  [{C_INFO}]Video context:[/{C_INFO}]\n"
+            f"    duration={v.get('duration_seconds')}s, frames={v.get('frames')}, keyframes={v.get('keyframes')}\n"
+            f"    [dim]{v.get('capacity_note')}[/dim]"
+        )
+
     console.print(Panel(panel_content, title=f"[{C_TITLE}]StegoForge — Capacity Check[/{C_TITLE}]",
                         border_style="yellow", padding=(1, 2)))
 
@@ -577,7 +1171,7 @@ def _print_single_result(r: dict):
             level = f.get("suspicion", "low")
             icon = "❗" if level == "high" else "⚠" if level == "medium" else "ℹ"
             table.add_row(f.get("field", ""), f"[dim]{icon}[/dim] {f.get('description', '')[:70]}")
-    elif r["method"] == "blind":
+    elif r["method"] in ("blind", "blind-audio"):
         if "candidates_found" in details:
             table.add_row("Candidates", str(details["candidates_found"]))
         for cand in details.get("candidates", [])[:3]:
@@ -607,6 +1201,8 @@ def interactive_encode():
     # Show method options
     console.print(f"\n  [dim]Available methods:[/dim]")
     auto_method = auto_detect_method(carrier)
+    if Path(carrier).suffix.lower() in (".png", ".bmp", ".webp"):
+        auto_method = "adaptive-lsb"
     for i, (m, (cat, desc)) in enumerate(ENCODE_METHODS.items(), 1):
         marker = f"[{C_SUCCESS}] ✓ auto[/{C_SUCCESS}]" if m == auto_method else ""
         console.print(f"    [{C_DIM}]{i:2}.[/{C_DIM}] [{C_ACCENT}]{m:12}[/{C_ACCENT}] {desc} {marker}")
@@ -635,7 +1231,24 @@ def interactive_encode():
 
     console.print()
     with console.status(f"[{C_INFO}]Encrypting and embedding payload...[/{C_INFO}]", spinner="dots"):
-        result = op_encode(carrier, payload, key, output or None, method, depth, decoy, decoy_key, False)
+        result = op_encode(
+            carrier,
+            payload,
+            key,
+            output or None,
+            method,
+            depth,
+            decoy,
+            decoy_key,
+            False,
+            None,
+            False,
+            False,
+            None,
+            None,
+            None,
+            False,
+        )
     print_encode_result(result)
 
 
@@ -650,7 +1263,7 @@ def interactive_decode():
 
     console.print()
     with console.status(f"[{C_INFO}]Extracting and decrypting payload...[/{C_INFO}]", spinner="dots"):
-        result = op_decode(file, key, output or None, method_input or None, False)
+        result = op_decode(file, key, output or None, method_input or None, False, False)
     print_decode_result(result)
 
 
@@ -658,17 +1271,31 @@ def interactive_detect():
     """Interactive detect wizard."""
     console.print(f"\n[{C_TITLE}]── DETECT ──────────────────────────────────────[/{C_TITLE}]")
     file = Prompt.ask(f"  [{C_ACCENT}]File to analyze[/{C_ACCENT}] (path)")
-    console.print(f"  [{C_DIM}]Detectors: chi2, rs, exif, blind, all[/{C_DIM}]")
+    console.print(f"  [{C_DIM}]Detectors: chi2, rs, exif, blind, ml, fingerprint, binary, all[/{C_DIM}]")
     which = Prompt.ask(f"  [{C_ACCENT}]Detectors to run[/{C_ACCENT}]", default="all")
 
     chi2_flag = "chi2" in which or which == "all"
     rs_flag = "rs" in which or which == "all"
     exif_flag = "exif" in which or which == "all"
     blind_flag = "blind" in which or which == "all"
+    ml_flag = "ml" in which or which == "all"
+    fingerprint_flag = "fingerprint" in which or which == "all"
+    binary_flag = "binary" in which or which == "all"
 
     console.print()
     with console.status(f"[{C_INFO}]Analyzing file...[/{C_INFO}]", spinner="dots"):
-        result = op_detect(file, chi2_flag, rs_flag, exif_flag, blind_flag, which == "all", False)
+        result = op_detect(
+            file,
+            chi2_flag,
+            rs_flag,
+            exif_flag,
+            blind_flag,
+            ml_flag,
+            fingerprint_flag,
+            binary_flag,
+            which == "all",
+            False,
+        )
     print_detect_results(result)
 
 
@@ -696,9 +1323,45 @@ def interactive_capacity():
     print_capacity_result(result)
 
 
+def interactive_survive():
+    """Interactive platform survivability wizard."""
+    console.print(f"\n[{C_TITLE}]── PLATFORM SURVIVAL CHECK ─────────────────────[/{C_TITLE}]")
+    carrier = Prompt.ask(f"  [{C_ACCENT}]Carrier file[/{C_ACCENT}]")
+    payload = Prompt.ask(f"  [{C_ACCENT}]Payload file[/{C_ACCENT}]")
+    key = Prompt.ask(f"  [{C_ACCENT}]Encryption key[/{C_ACCENT}]", password=True)
+    target = Prompt.ask(
+        f"  [{C_ACCENT}]Target platform[/{C_ACCENT}]",
+        choices=["twitter", "instagram", "telegram", "discord", "whatsapp", "facebook", "tiktok", "linkedin", "reddit", "signal"],
+        default="twitter",
+    )
+    output = Prompt.ask(f"  [{C_ACCENT}]Output path[/{C_ACCENT}] (Enter for auto)", default="")
+
+    with console.status(f"[{C_INFO}]Encoding and simulating platform pipeline...[/{C_INFO}]", spinner="dots"):
+        result = op_encode(
+            carrier,
+            payload,
+            key,
+            output or None,
+            None,
+            1,
+            None,
+            None,
+            False,
+            target,
+            True,
+            False,
+            None,
+            None,
+            None,
+            False,
+        )
+    print_encode_result(result)
+
+
 def interactive_menu():
     """Main interactive menu."""
     print_banner()
+    _startup_loading_sequence()
 
     menu_items = [
         ("[bold cyan]1[/bold cyan]", "Encode",    "Embed a secret payload in any carrier"),
@@ -707,6 +1370,8 @@ def interactive_menu():
         ("[bold cyan]4[/bold cyan]", "CTF Mode",  "Run all detectors, get full forensic report"),
         ("[bold cyan]5[/bold cyan]", "Capacity",  "Check how much data a carrier can hold"),
         ("[bold cyan]6[/bold cyan]", "Web UI",    "Launch the local web interface"),
+        ("[bold cyan]7[/bold cyan]", "Survival",  "Platform Survival Check"),
+        ("[bold cyan]8[/bold cyan]", "Dead Drop", "Dead drop and key exchange commands"),
         ("[bold cyan]q[/bold cyan]", "Quit",      "Exit StegoForge"),
     ]
 
@@ -725,24 +1390,39 @@ def interactive_menu():
 
         try:
             if choice == "1" or choice == "encode":
+                _menu_transition("Encode")
                 interactive_encode()
             elif choice == "2" or choice == "decode":
+                _menu_transition("Decode")
                 interactive_decode()
             elif choice == "3" or choice == "detect":
+                _menu_transition("Detect")
                 interactive_detect()
             elif choice == "4" or choice == "ctf":
+                _menu_transition("CTF Mode")
                 interactive_ctf()
             elif choice == "5" or choice == "capacity":
+                _menu_transition("Capacity")
                 interactive_capacity()
             elif choice == "6" or choice == "web":
+                _menu_transition("Web UI")
                 console.print(f"[{C_INFO}]Starting web UI...[/{C_INFO}]")
                 _launch_web()
                 break
+            elif choice == "7" or choice == "survival" or choice == "survive":
+                _menu_transition("Survival")
+                interactive_survive()
+            elif choice == "8" or choice == "deadrop":
+                _menu_transition("Dead Drop")
+                console.print(
+                    f"[{C_INFO}]Use CLI subcommands:[/{C_INFO}] "
+                    "stegoforge deadrop post|check|monitor and stegoforge deadrop keyx initiate|complete"
+                )
             elif choice in ("q", "quit", "exit"):
                 console.print(f"[{C_DIM}]Goodbye.[/{C_DIM}]")
                 raise typer.Exit()
             else:
-                console.print(f"[{C_WARN}]Unknown command. Type 1-6 or q.[/{C_WARN}]")
+                console.print(f"[{C_WARN}]Unknown command. Type 1-8 or q.[/{C_WARN}]")
         except (ValueError, IOError) as e:
             console.print(f"[{C_ERROR}][ERROR][/{C_ERROR}] {e}")
         except KeyboardInterrupt:
@@ -787,10 +1467,50 @@ def cmd_encode(
     depth:     int  = typer.Option(1,    "--depth",     help="Bit depth 1-4 (higher = more capacity, less invisible)"),
     decoy:     Optional[str] = typer.Option(None,       "--decoy",   help="Decoy payload file (enables dual-payload mode)"),
     decoy_key: Optional[str] = typer.Option(None,       "--decoy-key", help="Key for decoy payload"),
+    wet_paper: bool = typer.Option(False, "--wet-paper", help="Apply Reed-Solomon wet paper protection for lossy survivability"),
+    target: Optional[str] = typer.Option(None, "--target", help="Target platform profile: twitter, instagram, telegram, discord, whatsapp, facebook, tiktok, linkedin, reddit, signal"),
+    test_survival: bool = typer.Option(False, "--test-survival", help="Simulate target platform recompression and test extraction locally"),
+    preserve_fingerprint: bool = typer.Option(
+        False,
+        "--preserve-fingerprint",
+        help="Use PRNU-aware embedding for real-camera images (slower, reduced effective capacity)",
+    ),
+    cover: Optional[str] = typer.Option(None, "--cover", help="Cover text file for linguistic mode (Tier A)"),
+    topic: Optional[str] = typer.Option(None, "--topic", help="Topic prompt for linguistic generation mode (Tier B)"),
+    llm_model: Optional[str] = typer.Option(None, "--llm-model", help="LLM model or endpoint descriptor for linguistic Tier B"),
+    target_ip: Optional[str] = typer.Option(None, "--target-ip", help="Target IP for network covert methods"),
+    target_port: Optional[int] = typer.Option(None, "--target-port", help="Target port for network covert methods"),
+    listen_ip: Optional[str] = typer.Option(None, "--listen-ip", help="Listener IP for decode/network receive paths"),
+    listen_port: Optional[int] = typer.Option(None, "--listen-port", help="Listener port for decode/network receive paths"),
+    channel: Optional[str] = typer.Option(None, "--channel", help="Network channel: ip_id|tcp_seq|ttl|timing"),
+    timing_delta: int = typer.Option(50, "--timing-delta", help="Timing channel delta in milliseconds"),
     json_mode: bool = typer.Option(False, "--json",      help="Output JSON instead of formatted text"),
 ):
     try:
-        result = op_encode(carrier, payload, key, output, method, depth, decoy, decoy_key, json_mode)
+        result = op_encode(
+            carrier,
+            payload,
+            key,
+            output,
+            method,
+            depth,
+            decoy,
+            decoy_key,
+            wet_paper,
+            target,
+            test_survival,
+            preserve_fingerprint,
+            cover,
+            topic,
+            llm_model,
+            json_mode,
+            target_ip=target_ip,
+            target_port=target_port,
+            listen_ip=listen_ip,
+            listen_port=listen_port,
+            channel=channel,
+            timing_delta=timing_delta,
+        )
         if json_mode:
             print(json.dumps(result, indent=2))
         else:
@@ -809,10 +1529,30 @@ def cmd_decode(
     key:       str  = typer.Option(..., "-k", "--key",    help="Decryption passphrase"),
     output:    Optional[str] = typer.Option(None, "-o", "--output", help="Output path (auto if omitted)"),
     method:    Optional[str] = typer.Option(None,       "--method", help="Encoding method (auto-detected if omitted)"),
+    wet_paper: bool = typer.Option(False, "--wet-paper", help="Decode payload as wet paper encoded before decryption"),
+    target_ip: Optional[str] = typer.Option(None, "--target-ip", help="Target IP for network covert methods"),
+    target_port: Optional[int] = typer.Option(None, "--target-port", help="Target port for network covert methods"),
+    listen_ip: Optional[str] = typer.Option(None, "--listen-ip", help="Listener IP for network covert methods"),
+    listen_port: Optional[int] = typer.Option(None, "--listen-port", help="Listener port for network covert methods"),
+    channel: Optional[str] = typer.Option(None, "--channel", help="Network channel: ip_id|tcp_seq|ttl|timing"),
+    timing_delta: int = typer.Option(50, "--timing-delta", help="Timing channel delta in milliseconds"),
     json_mode: bool = typer.Option(False, "--json",     help="Output JSON"),
 ):
     try:
-        result = op_decode(file, key, output, method, json_mode)
+        result = op_decode(
+            file,
+            key,
+            output,
+            method,
+            wet_paper,
+            json_mode,
+            target_ip=target_ip,
+            target_port=target_port,
+            listen_ip=listen_ip,
+            listen_port=listen_port,
+            channel=channel,
+            timing_delta=timing_delta,
+        )
         if json_mode:
             print(json.dumps(result, indent=2))
         else:
@@ -832,6 +1572,9 @@ def cmd_detect(
     rs:           bool = typer.Option(False, "--rs",       help="Run RS analysis"),
     exif:         bool = typer.Option(False, "--exif",     help="Run EXIF/metadata scanner"),
     blind:        bool = typer.Option(False, "--blind",    help="Run blind brute-force extractor"),
+    ml:           bool = typer.Option(False, "--ml",       help="Run ML steganalysis (downloads small Hugging Face ONNX model on first use)"),
+    fingerprint:  bool = typer.Option(False, "--fingerprint", help="Run PRNU inconsistency detector"),
+    binary:       bool = typer.Option(False, "--binary",   help="Run ELF/PE binary slack anomaly detector"),
     all_detect:   bool = typer.Option(False, "--all",      help="Run all detectors"),
     json_mode:    bool = typer.Option(False, "--json",     help="Output JSON"),
     stdin:        bool = typer.Option(False, "--stdin",    help="Read file from stdin"),
@@ -841,9 +1584,9 @@ def cmd_detect(
             data = sys.stdin.buffer.read()
             tmpfile = Path("/tmp/stegoforge_stdin_detect.bin")
             tmpfile.write_bytes(data)
-            result = op_detect(str(tmpfile), chi2, rs, exif, blind, all_detect, json_mode)
+            result = op_detect(str(tmpfile), chi2, rs, exif, blind, ml, fingerprint, binary, all_detect, json_mode)
         else:
-            result = op_detect(file, chi2, rs, exif, blind, all_detect, json_mode)
+            result = op_detect(file, chi2, rs, exif, blind, ml, fingerprint, binary, all_detect, json_mode)
         if json_mode:
             print(json.dumps(result, indent=2))
         else:
@@ -931,6 +1674,235 @@ def cmd_capacity(
         else:
             console.print(f"[{C_ERROR}][ERROR][/{C_ERROR}] {e}")
         raise typer.Exit(1)
+
+
+@app.command("survive", help="Run local platform survivability simulation")
+def cmd_survive(
+    carrier: str = typer.Option(..., "-c", "--carrier", help="Carrier file"),
+    payload: str = typer.Option(..., "-p", "--payload", help="Payload file"),
+    key: str = typer.Option(..., "-k", "--key", help="Encryption passphrase"),
+    target: str = typer.Option(..., "--target", help="Platform target: twitter|instagram|telegram|discord|whatsapp|facebook|tiktok|linkedin|reddit|signal"),
+    method: Optional[str] = typer.Option(None, "--method", help="Optional method override"),
+    depth: int = typer.Option(1, "--depth", help="Bit depth 1-4"),
+    output: Optional[str] = typer.Option(None, "-o", "--output", help="Output path"),
+    json_mode: bool = typer.Option(False, "--json", help="Output JSON"),
+):
+    try:
+        result = op_encode(
+            carrier,
+            payload,
+            key,
+            output,
+            method,
+            depth,
+            None,
+            None,
+            False,
+            target,
+            True,
+            False,
+            None,
+            None,
+            None,
+            json_mode,
+        )
+        if json_mode:
+            print(json.dumps(result, indent=2))
+        else:
+            print_encode_result(result)
+    except (ValueError, IOError) as e:
+        if json_mode:
+            print(json.dumps({"status": "error", "message": str(e)}))
+        else:
+            console.print(f"[{C_ERROR}][ERROR][/{C_ERROR}] {e}")
+        raise typer.Exit(1)
+
+
+@deadrop_app.command("post", help="Encode and prepare a dead-drop carrier")
+def deadrop_post(
+    carrier: str = typer.Option(..., "-c", "--carrier", help="Carrier file"),
+    payload: str = typer.Option(..., "-p", "--payload", help="Payload file"),
+    key: str = typer.Option(..., "-k", "--key", help="Shared channel key"),
+    method: Optional[str] = typer.Option(None, "--method", help="Encoding method"),
+    output: Optional[str] = typer.Option(None, "-o", "--output", help="Output stego file"),
+    upload_url: Optional[str] = typer.Option(None, "--upload-url", help="Optional HTTP endpoint to upload stego carrier"),
+    upload_method: str = typer.Option("PUT", "--upload-method", help="HTTP upload method: PUT or POST"),
+):
+    result = op_encode(
+        carrier,
+        payload,
+        key,
+        output,
+        method,
+        1,
+        None,
+        None,
+        False,
+        None,
+        False,
+        False,
+        None,
+        None,
+        None,
+        False,
+    )
+    print_encode_result(result)
+
+    if upload_url:
+        from protocol.deadrop import upload_bytes
+
+        payload_bytes = Path(result["output"]).read_bytes()
+        upload_result = upload_bytes(upload_url, payload_bytes, method=upload_method)
+        console.print(
+            f"[{C_SUCCESS}]Uploaded dead-drop carrier:[/{C_SUCCESS}] "
+            f"HTTP {upload_result['status']} {upload_result['reason']}"
+        )
+
+
+@deadrop_app.command("check", help="Fetch URL once and attempt dead-drop extraction")
+def deadrop_check(
+    url: str = typer.Option(..., "--url", help="Public URL hosting the carrier"),
+    key: str = typer.Option(..., "-k", "--key", help="Shared channel key"),
+    method: Optional[str] = typer.Option(None, "--method", help="Optional method hint"),
+    output: Optional[str] = typer.Option(None, "-o", "--output", help="Decoded payload output"),
+):
+    from protocol.deadrop import fetch_url_bytes
+    import tempfile
+
+    blob = fetch_url_bytes(url)
+    suffix = Path(url.split("?")[0]).suffix or ".bin"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp.write(blob)
+        tmp.flush()
+        path = tmp.name
+
+    result = op_decode(path, key, output, method, False, False)
+    print_decode_result(result)
+
+
+@deadrop_app.command("monitor", help="Poll URL and extract unseen dead-drop payloads")
+def deadrop_monitor(
+    url: str = typer.Option(..., "--url", help="Public URL hosting rotating carriers"),
+    key: str = typer.Option(..., "-k", "--key", help="Shared channel key"),
+    method: Optional[str] = typer.Option(None, "--method", help="Optional method hint"),
+    interval: int = typer.Option(30, "--interval", help="Polling interval in seconds"),
+):
+    from protocol.deadrop import monitor_loop
+    import tempfile
+    from urllib.parse import urlparse
+
+    console.print(f"[{C_INFO}]Monitoring {url} every {interval}s... (Ctrl+C to stop)[/{C_INFO}]")
+
+    def _on_new(blob: bytes, digest: str):
+        try:
+            suffix = Path(urlparse(url).path).suffix or ".bin"
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                tmp.write(blob)
+                tmp.flush()
+                path = tmp.name
+            result = op_decode(path, key, None, method, False, False)
+            console.print(f"[{C_SUCCESS}]New payload extracted from hash {digest[:12]}... -> {result['output']}[/{C_SUCCESS}]")
+        except Exception:
+            console.print(f"[{C_DIM}]No payload extracted for hash {digest[:12]}...[/{C_DIM}]")
+
+    monitor_loop(url, interval, _on_new)
+
+
+@deadrop_keyx_app.command("initiate", help="Create local private key and embed X25519 public key in a carrier")
+def deadrop_keyx_initiate(
+    carrier: str = typer.Option(..., "-c", "--carrier", help="Carrier file"),
+    output: str = typer.Option(..., "-o", "--output", help="Output stego carrier path"),
+    private_key_file: str = typer.Option(".stegoforge_keyx.priv", "--private-key-file", help="Encrypted local private key file path"),
+    local_passphrase: str = typer.Option(..., "--local-passphrase", help="Local passphrase protecting private key file"),
+    method: Optional[str] = typer.Option(None, "--method", help="Embedding method"),
+    depth: int = typer.Option(1, "--depth", help="Bit depth for LSB-like methods"),
+):
+    """Security note: forward secrecy depends on keeping local private-key file and passphrase secure."""
+    from protocol.keyexchange import generate_ephemeral_keypair, save_private_key_file
+
+    m = method or auto_detect_method(carrier)
+    encoder = get_encoder(m)
+    carrier_path = Path(carrier)
+    carrier_bytes = carrier_path.read_bytes()
+    priv_raw, pub_raw = generate_ephemeral_keypair()
+
+    kwargs = {"depth": depth}
+    ext = carrier_path.suffix.lower()
+    if m in ("audio-lsb", "phase", "spectrogram", "video-dct", "video-motion"):
+        kwargs["ext"] = ext
+    if m in ("docx", "xlsx", "office"):
+        kwargs["filename"] = str(carrier_path)
+
+    cap = encoder.capacity(carrier_bytes, **kwargs)
+    if len(pub_raw) > cap:
+        raise typer.BadParameter(f"Carrier capacity too small for key exchange payload ({cap} bytes)")
+
+    stego = encoder.encode(carrier_bytes, pub_raw, **kwargs)
+    Path(output).write_bytes(stego)
+    save_private_key_file(private_key_file, priv_raw, local_passphrase)
+
+    console.print(f"[{C_SUCCESS}]Key exchange initiate complete.[/{C_SUCCESS}]")
+    console.print(f"[{C_INFO}]Public key embedded carrier: {output}[/{C_INFO}]")
+    console.print(f"[{C_WARN}]Security note:[/{C_WARN}] protect local passphrase/private key file; compromise breaks session secrecy.")
+
+
+@deadrop_keyx_app.command("complete", help="Extract peer public key and derive shared session key")
+def deadrop_keyx_complete(
+    received_file: str = typer.Option(..., "-f", "--file", help="Received stego carrier containing peer public key"),
+    private_key_file: str = typer.Option(".stegoforge_keyx.priv", "--private-key-file", help="Encrypted local private key file path"),
+    local_passphrase: str = typer.Option(..., "--local-passphrase", help="Local passphrase protecting private key file"),
+    method: Optional[str] = typer.Option(None, "--method", help="Method hint"),
+    output_key_file: Optional[str] = typer.Option(None, "--output-key-file", help="Optional file to save derived session key"),
+):
+    """Security note: X25519 provides forward secrecy, but carrier secrecy still matters."""
+    from protocol.keyexchange import load_private_key_file, derive_shared_secret, derive_session_key_hex
+
+    file_path = Path(received_file)
+    data = file_path.read_bytes()
+    ext = file_path.suffix.lower()
+
+    methods = [method] if method else []
+    if not methods:
+        suggested = auto_detect_method(received_file)
+        methods = [suggested]
+
+    peer_pub = None
+    for m in methods:
+        encoder = get_encoder(m)
+        kwargs = {"depth": 1}
+        if m in ("audio-lsb", "phase", "spectrogram", "video-dct", "video-motion"):
+            kwargs["ext"] = ext
+        if m in ("docx", "xlsx", "office"):
+            kwargs["filename"] = str(file_path)
+        depths = [1, 2, 3, 4] if m in ("lsb", "adaptive-lsb", "fingerprint-lsb", "audio-lsb") else [1]
+        for d in depths:
+            kwargs["depth"] = d
+            try:
+                raw = encoder.decode(data, **kwargs)
+                if len(raw) == 32:
+                    peer_pub = raw
+                    break
+            except Exception:
+                continue
+        if peer_pub is not None:
+            break
+
+    if peer_pub is None:
+        raise typer.BadParameter("Failed to extract 32-byte peer X25519 public key from carrier")
+
+    priv_raw = load_private_key_file(private_key_file, local_passphrase)
+    shared = derive_shared_secret(priv_raw, peer_pub)
+    session_key = derive_session_key_hex(shared)
+
+    if output_key_file:
+        Path(output_key_file).write_text(session_key, encoding="utf-8")
+        console.print(f"[{C_SUCCESS}]Derived session key saved to {output_key_file}[/{C_SUCCESS}]")
+    else:
+        console.print(f"[{C_SUCCESS}]Derived session key:[/{C_SUCCESS}] {session_key}")
+
+    console.print(
+        f"[{C_WARN}]Security note:[/{C_WARN}] X25519 gives forward secrecy, but carriers must remain plausibly innocuous to passive observers."
+    )
 
 
 @app.command("web", help="Launch the local web UI")
