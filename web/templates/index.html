@@ -8,10 +8,11 @@
 <link rel="icon" type="image/svg+xml" href="/static/stegoforge-favicon.svg">
 <link rel="shortcut icon" type="image/svg+xml" href="/static/stegoforge-favicon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Outfit:wght@400;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body data-initial-tab="{{ initial_tab|default('encode') }}">
+<div id="ambient-mesh"></div>
 <!-- Local processing notice -->
 <div id="local-notice">
   🔒 All files are processed <strong>locally</strong> on your machine. Nothing is uploaded to any server.
@@ -100,7 +101,7 @@
         <input type="password" id="enc-key" name="key" class="form-input" placeholder="Enter a strong passphrase…" autocomplete="new-password">
         <button type="button" class="btn-icon" id="enc-key-toggle" title="Show/hide password">👁</button>
       </div>
-      <div class="input-tip">💡 Tip: Use Argon2-derived keys. The stronger the passphrase, the harder to crack.</div>
+      <div class="input-tip">💡 Note: StegoForge automatically hardens your passphrase using the Argon2id key derivation function. Just ensure you choose a strong base password!</div>
     </div>
 
     <!-- Method Pills -->
@@ -624,12 +625,32 @@
 
     <div class="help-card">
       <div class="help-card-icon">🕵️</div>
-      <h2>Detection Methods</h2>
+      <h2>Advanced Forensics</h2>
       <ul>
-        <li><strong>Chi-Square:</strong> Statistical test on pixel value distributions. LSB embedding creates equal pairs (2k, 2k+1) — natural images don't have this. Confidence 0–100%.</li>
-        <li><strong>RS Analysis:</strong> Estimates what percentage of pixels carry hidden data by measuring how a "smoothness" metric changes when pixel LSBs are flipped.</li>
-        <li><strong>EXIF Forensics:</strong> Scans all metadata — UserComment, Software field, GPS, PNG chunks, PDF metadata — for anomalies or tool signatures.</li>
-        <li><strong>Blind Extractor:</strong> Tries every combination of channel (R/G/B/A), bit depth (1–4), row order, and channel permutation. Scores results for real payloads.</li>
+        <li><strong>ML Analysis:</strong> Uses neural networks trained on Stego databases to detect probabilistic payload noise.</li>
+        <li><strong>PRNU Fingerprint:</strong> Analyzes camera sensor noise. Traditional embedding damages this fingerprint. StegoForge's Fingerprint method preserves it.</li>
+        <li><strong>Chi-Square & RS:</strong> Detects flat LSB embedding. "Adaptive LSB" dodges these successfully.</li>
+        <li><strong>Blind Extractor:</strong> Brute-forces every parameter combination to attempt payload extraction automatically during CTF mode.</li>
+      </ul>
+    </div>
+
+    <div class="help-card">
+      <div class="help-card-icon">🧪</div>
+      <h2>Survive & Capacity</h2>
+      <ul>
+        <li><strong>Platform Survival:</strong> Simulates social media compression algorithms (Twitter, Discord, etc.) locally using Wet Paper Codes to ensure your payload survives upload.</li>
+        <li><strong>Live Capacity:</strong> Dynamic calculation matrix that predicts how much data a carrier can hold across all methods based on its dimensions and depth.</li>
+      </ul>
+    </div>
+
+    <div class="help-card">
+      <div class="help-card-icon">🧬</div>
+      <h2>Hybrid & Experimental</h2>
+      <ul>
+        <li><strong>Adaptive LSB:</strong> Content-aware algorithm that hides data in high-texture, noisy regions to evade detectors.</li>
+        <li><strong>Video Motion:</strong> Evaluates temporal cost to embed data inside high-motion video frames, leaving static scenes untouched.</li>
+        <li><strong>Linguistic Text:</strong> Context-preserving word substitutions via statistical N-gram analysis to encode payload bits into paragraphs.</li>
+        <li><strong>Decoy Mode:</strong> Plausible deniability. Embed two payloads using two keys in the same carrier. Reveal the decoy key under duress.</li>
       </ul>
     </div>
 

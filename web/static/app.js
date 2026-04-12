@@ -419,7 +419,7 @@ function renderConfidenceBar(confidence) {
   </div>`;
 }
 
-function renderDetectorResult(r) {
+function renderDetectorResult(r, idx = 0) {
   const detected = !!r.detected;
   const details = r.details || {};
   const isSkipped = details.skipped === true;
@@ -445,7 +445,7 @@ function renderDetectorResult(r) {
     extra += `<div class="result-grid"><div class="result-key">Verdict</div><div class="result-val">${details.verdict || 'N/A'}</div><div class="result-key">Hints</div><div class="result-val">${(details.hints || []).join('; ') || 'None'}</div></div>`;
   }
 
-  return `<div class="result-card" style="margin-bottom:12px">
+  return `<div class="result-card" style="margin-bottom:12px; animation: fadeIn 0.4s cubic-bezier(0.2,0.8,0.2,1) forwards; animation-delay: ${idx * 0.12}s; opacity: 0">
     <div class="result-title accent-title">${statusIcon} ${String(r.method || '').toUpperCase()} ${statusLabel}</div>
     ${renderConfidenceBar(r.confidence)}
     ${extra}
@@ -611,8 +611,8 @@ function b64toBlob(b64Data, contentType = 'application/octet-stream') {
 
       let html = `<div class="result-card"><div class="result-title accent-title">Detector Stream</div><pre class="code-block">${logs.join('\n')}</pre></div>`;
       html += `<h3 style="font-size:1rem;color:var(--accent-cyan);margin-bottom:16px">Results for: <em>${finalReport.file}</em></h3>`;
-      (finalReport.results || []).forEach((r) => {
-        html += renderDetectorResult(r);
+      (finalReport.results || []).forEach((r, idx) => {
+        html += renderDetectorResult(r, idx);
       });
       result.innerHTML = html;
       result.style.display = 'block';
@@ -655,8 +655,8 @@ function b64toBlob(b64Data, contentType = 'application/octet-stream') {
         <div class="ctf-verdict-pct">Overall confidence: ${pct}%</div>
       </div>`;
 
-      (data.results || []).forEach((r) => {
-        html += renderDetectorResult(r);
+      (data.results || []).forEach((r, idx) => {
+        html += renderDetectorResult(r, idx);
       });
 
       if (data.notes && data.notes.length) {
