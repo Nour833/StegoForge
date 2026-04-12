@@ -40,8 +40,11 @@ def ffmpeg_available() -> bool:
     return False
 
 def model_available() -> bool:
-    # Just checking if the dir has some onnx file (lite model)
-    return (MODELS_DIR / "srnet_lite.onnx").exists() or (MODELS_DIR / "srnet_model.onnx").exists()
+    # Check local cache and bundled offline model shipped with source/release.
+    from detect.ml_steganalysis import MODEL_NAME, bundled_model_paths
+    if (MODELS_DIR / MODEL_NAME).exists() or (MODELS_DIR / "srnet_lite.onnx").exists() or (MODELS_DIR / "srnet_model.onnx").exists():
+        return True
+    return any(p.exists() and p.stat().st_size > 0 for p in bundled_model_paths())
 
 def _download_with_progress(url: str, output_path: Path, desc: str):
     console.print(f"[bold cyan]Downloading {desc}...[/bold cyan]")
@@ -123,17 +126,22 @@ def _install_ffmpeg_macos():
         subprocess.run(["xattr", "-d", "com.apple.quarantine", str(ffmpeg_bin)], capture_output=True)
 
 def _install_models():
-    # Use hf_hub_download to place it locally
+    # Bundled-only model install path (offline-first and offline-only).
     try:
-        from huggingface_hub import hf_hub_download # type: ignore
-        console.print("[bold cyan]Downloading ML Steganalysis Model...[/bold cyan]")
-        hf_hub_download(
-            repo_id="Nour833/StegoForge-Models",
-            filename="srnet_lite.onnx",
-            local_dir=str(MODELS_DIR)
-        )
+        from detect.ml_steganalysis import MODEL_NAME, bundled_model_paths
+
+        for bundled in bundled_model_paths():
+            if bundled.exists() and bundled.stat().st_size > 0:
+                target_flat = MODELS_DIR / MODEL_NAME
+                target_flat.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(bundled, target_flat)
+
+                console.print("[bold cyan]Using bundled ML Steganalysis Model (offline).[/bold cyan]")
+                return
+
+        raise FileNotFoundError("Bundled model file was not found in source or packaged resources")
     except Exception as e:
-        console.print(f"[red]Failed to download model: {e}[/red]")
+        console.print(f"[red]Failed to install bundled ML model: {e}[/red]")
 
 def bootstrap_if_needed(require: list[str] = None, force: bool = False):
     """
@@ -146,8 +154,9 @@ def bootstrap_if_needed(require: list[str] = None, force: bool = False):
     missing = []
     if force or not ffmpeg_available():
         missing.append("ffmpeg")
+    from detect.ml_steganalysis import MODEL_NAME
     if force or not model_available() and (require is None or "ml" in require):
-        missing.append("srnet_lite.onnx")
+        missing.append(MODEL_NAME)
 
     if not missing:
         return
@@ -168,5 +177,5 @@ def bootstrap_if_needed(require: list[str] = None, force: bool = False):
         except Exception as e:
             console.print(f"[red]FFmpeg auto-download failed: {e}[/red]")
 
-    if "srnet_lite.onnx" in missing:
+    if MODEL_NAME in missing:
         _install_models()

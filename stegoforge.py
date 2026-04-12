@@ -10,6 +10,12 @@ import os
 import sys
 import time
 import io
+import platform
+import re
+import shutil
+import tempfile
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Optional
 
@@ -87,6 +93,8 @@ def _env_float(name: str, default: float) -> float:
 
 UI_STAGE_DELAY = _env_float("STEGOFORGE_UI_STAGE_DELAY", 0.45)
 UI_TRANSITION_DELAY = _env_float("STEGOFORGE_UI_TRANSITION_DELAY", 0.55)
+GITHUB_REPO = os.getenv("STEGOFORGE_GITHUB_REPO", "Nour833/StegoForge").strip()
+GITHUB_RELEASES_LATEST_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 
 
 def _ui_sleep(seconds: float):
@@ -169,6 +177,225 @@ def print_banner():
         console.print(Align.center(f"[bold white]{PRIMARY_TAGLINE}[/bold white]"))
     
     console.print()
+
+
+def _version_tuple(value: str) -> tuple[int, ...]:
+    parts = re.findall(r"\d+", value or "")
+    if not parts:
+        return (0,)
+    return tuple(int(p) for p in parts[:4])
+
+
+def _current_version() -> str:
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+
+        try:
+            return version("stegoforge")
+        except PackageNotFoundError:
+            return "1.0.0"
+    except Exception:
+        return "1.0.0"
+
+
+def _is_archive_asset(name: str) -> bool:
+    lower = name.lower()
+    return lower.endswith(".zip") or lower.endswith(".tar.gz") or lower.endswith(".tgz")
+
+
+def _select_release_asset(assets: list[dict]) -> Optional[dict]:
+    system = platform.system().lower()
+    arch = platform.machine().lower()
+    os_aliases = {
+        "linux": ("linux", "gnu-linux", "manylinux"),
+        "windows": ("windows", "win32", "win64", "mingw", ".exe"),
+        "darwin": ("darwin", "macos", "osx", "universal2", "mac"),
+    }
+    arch_aliases = {
+        "x86_64": ("x86_64", "amd64", "x64"),
+        "amd64": ("x86_64", "amd64", "x64"),
+        "aarch64": ("aarch64", "arm64"),
+        "arm64": ("aarch64", "arm64"),
+        "armv7l": ("armv7", "armv7l"),
+        "i386": ("i386", "x86"),
+        "i686": ("i686", "x86"),
+    }
+
+    def _contains_any(haystack: str, needles: tuple[str, ...]) -> bool:
+        return any(n in haystack for n in needles)
+
+    all_arch_markers = (
+        "x86_64", "amd64", "x64", "aarch64", "arm64", "armv7", "armv7l", "i386", "i686", "x86"
+    )
+
+    expected_os = os_aliases.get(system, ())
+    expected_arch = arch_aliases.get(arch, ())
+    best = None
+    best_score = -1
+    candidates: list[dict] = []
+
+    for asset in assets:
+        name = str(asset.get("name", "")).strip()
+        if not name:
+            continue
+        lower = name.lower()
+
+        if any(lower.endswith(ext) for ext in (".sha256", ".sha512", ".sig", ".txt", ".json")):
+            continue
+        candidates.append(asset)
+
+        score = 0
+        if expected_os and not _contains_any(lower, expected_os):
+            continue
+        score += 8
+
+        mentions_any_arch = _contains_any(lower, all_arch_markers)
+        if expected_arch and _contains_any(lower, expected_arch):
+            score += 4
+        elif mentions_any_arch and expected_arch:
+            # Asset explicitly targets a different architecture.
+            continue
+        else:
+            # OS match but architecture not stated; keep as lower-priority fallback.
+            score += 1
+
+        if lower.startswith("stegoforge"):
+            score += 1
+
+        if _is_archive_asset(name):
+            score -= 1
+
+        if score > best_score:
+            best_score = score
+            best = asset
+
+    # If only one meaningful asset exists, accept it as a universal fallback.
+    if best is None and len(candidates) == 1:
+        return candidates[0]
+
+    return best
+
+
+def _download_release_asset(url: str, target: Path):
+    target.parent.mkdir(parents=True, exist_ok=True)
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "StegoForge-Updater",
+            "Accept": "application/octet-stream",
+        },
+    )
+
+    with urllib.request.urlopen(req, timeout=120) as resp, target.open("wb") as out:
+        total = int(resp.headers.get("Content-Length", "0") or "0")
+        chunk = 256 * 1024
+
+        if total > 0:
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[cyan]Downloading update...[/cyan]"),
+                BarColumn(),
+                TextColumn("{task.percentage:>3.0f}%"),
+                console=console,
+            ) as progress:
+                task = progress.add_task("download", total=total)
+                while True:
+                    data = resp.read(chunk)
+                    if not data:
+                        break
+                    out.write(data)
+                    progress.update(task, advance=len(data))
+        else:
+            with console.status(f"[{C_INFO}]Downloading update...[/{C_INFO}]", spinner="dots"):
+                while True:
+                    data = resp.read(chunk)
+                    if not data:
+                        break
+                    out.write(data)
+
+
+def op_update(check_only: bool = False, auto_apply: bool = False) -> dict:
+    current = _current_version()
+    req = urllib.request.Request(
+        GITHUB_RELEASES_LATEST_URL,
+        headers={
+            "User-Agent": "StegoForge-Updater",
+            "Accept": "application/vnd.github+json",
+        },
+    )
+
+    with urllib.request.urlopen(req, timeout=25) as resp:
+        release = json.loads(resp.read().decode("utf-8"))
+
+    latest_tag = str(release.get("tag_name") or release.get("name") or "").strip()
+    release_url = str(release.get("html_url") or f"https://github.com/{GITHUB_REPO}/releases").strip()
+    assets = release.get("assets") or []
+    selected = _select_release_asset(assets)
+
+    update_available = _version_tuple(latest_tag) > _version_tuple(current)
+    result = {
+        "current": current,
+        "latest": latest_tag,
+        "update_available": update_available,
+        "release_url": release_url,
+        "asset_name": str(selected.get("name")) if selected else "",
+        "asset_url": str(selected.get("browser_download_url")) if selected else "",
+        "downloaded_path": "",
+        "applied": False,
+        "can_auto_apply": False,
+    }
+
+    if not update_available or not selected or check_only:
+        return result
+
+    asset_name = str(selected.get("name", "")).strip()
+    asset_url = str(selected.get("browser_download_url", "")).strip()
+    if not asset_name or not asset_url:
+        return result
+
+    frozen = bool(getattr(sys, "frozen", False))
+    exe_path = Path(sys.argv[0]).resolve()
+    can_auto_apply = (
+        auto_apply
+        and frozen
+        and platform.system() != "Windows"
+        and exe_path.exists()
+        and os.access(exe_path.parent, os.W_OK)
+        and not _is_archive_asset(asset_name)
+    )
+    result["can_auto_apply"] = can_auto_apply
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix="stegoforge_update_"))
+    tmp_target = tmp_dir / asset_name
+    try:
+        _download_release_asset(asset_url, tmp_target)
+
+        if platform.system() != "Windows" and not _is_archive_asset(asset_name):
+            try:
+                tmp_target.chmod(tmp_target.stat().st_mode | 0o111)
+            except OSError:
+                pass
+
+        if can_auto_apply:
+            backup = Path(f"{exe_path}.old")
+            if backup.exists():
+                backup.unlink()
+            shutil.copy2(exe_path, backup)
+            os.replace(tmp_target, exe_path)
+            result["applied"] = True
+            result["downloaded_path"] = str(exe_path)
+            result["backup_path"] = str(backup)
+            return result
+
+        out_dir = exe_path.parent if frozen and exe_path.parent.exists() else Path.cwd()
+        out_path = out_dir / asset_name
+        if out_path.exists():
+            out_path = out_dir / f"{asset_name}.new"
+        shutil.move(str(tmp_target), str(out_path))
+        result["downloaded_path"] = str(out_path)
+        return result
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
     # Dashboard-style stats panel
     info_text = (
@@ -1415,6 +1642,52 @@ def interactive_survive():
     print_encode_result(result)
 
 
+def interactive_update():
+    """Interactive update checker and downloader."""
+    console.print(f"\n[{C_TITLE}]── UPDATE ──────────────────────────────────────[/{C_TITLE}]")
+    try:
+        with console.status(f"[{C_INFO}]Checking latest GitHub release...[/{C_INFO}]", spinner="dots"):
+            probe = op_update(check_only=True, auto_apply=False)
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError, ValueError) as e:
+        console.print(f"[{C_ERROR}][ERROR][/{C_ERROR}] Update check failed: {e}")
+        return
+
+    current = probe.get("current", "unknown")
+    latest = probe.get("latest", "unknown")
+    console.print(f"[{C_INFO}]Current version:[/{C_INFO}] {current}")
+    console.print(f"[{C_INFO}]Latest release:[/{C_INFO}] {latest}")
+
+    if not probe.get("update_available"):
+        console.print(f"[{C_SUCCESS}]You are up to date.[/{C_SUCCESS}]")
+        return
+
+    console.print(f"[{C_WARN}]Update available.[/{C_WARN}] {probe.get('release_url', '')}")
+    if not probe.get("asset_url"):
+        console.print(f"[{C_WARN}]No matching asset for this platform. Open releases page above.[/{C_WARN}]")
+        return
+
+    auto_apply = bool(getattr(sys, "frozen", False)) and platform.system() != "Windows"
+    action_label = "Download and apply update now" if auto_apply else "Download latest asset now"
+    if not Confirm.ask(f"  [{C_ACCENT}]{action_label}?[/{C_ACCENT}]", default=True):
+        return
+
+    try:
+        result = op_update(check_only=False, auto_apply=auto_apply)
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError, ValueError) as e:
+        console.print(f"[{C_ERROR}][ERROR][/{C_ERROR}] Update failed: {e}")
+        return
+
+    if result.get("applied"):
+        console.print(f"[{C_SUCCESS}]Update applied successfully.[/{C_SUCCESS}]")
+        console.print(f"[{C_DIM}]Restart StegoForge to run the new version.[/{C_DIM}]")
+    elif result.get("downloaded_path"):
+        console.print(f"[{C_SUCCESS}]Update downloaded:[/{C_SUCCESS}] {result['downloaded_path']}")
+        if platform.system() == "Windows" and getattr(sys, "frozen", False):
+            console.print(f"[{C_DIM}]Windows blocks replacing a running executable. Close app and replace manually.[/{C_DIM}]")
+    else:
+        console.print(f"[{C_WARN}]No update artifact was downloaded.[/{C_WARN}]")
+
+
 def interactive_menu():
     """Main interactive menu."""
     _startup_loading_sequence()
@@ -1429,6 +1702,7 @@ def interactive_menu():
         ("[bold cyan]6[/bold cyan]", "Web UI",    "Launch the local web interface"),
         ("[bold cyan]7[/bold cyan]", "Survival",  "Platform Survival Check"),
         ("[bold cyan]8[/bold cyan]", "Dead Drop", "Dead drop and key exchange commands"),
+        ("[bold cyan]9[/bold cyan]", "Update",    "Check GitHub for newer releases and update"),
         ("[bold cyan]q[/bold cyan]", "Quit",      "Exit StegoForge"),
     ]
 
@@ -1482,11 +1756,14 @@ def interactive_menu():
                     f"[{C_INFO}]Use CLI subcommands:[/{C_INFO}] "
                     "stegoforge deadrop post|check|monitor and stegoforge deadrop keyx initiate|complete"
                 )
+            elif choice == "9" or choice == "update":
+                _menu_transition("Update")
+                interactive_update()
             elif choice in ("q", "quit", "exit"):
                 console.print(f"[{C_DIM}]Goodbye.[/{C_DIM}]")
                 raise typer.Exit()
             else:
-                console.print(f"[{C_WARN}]Unknown command. Type 1-8 or q.[/{C_WARN}]")
+                console.print(f"[{C_WARN}]Unknown command. Type 1-9 or q.[/{C_WARN}]")
         except (ValueError, IOError) as e:
             console.print(f"[{C_ERROR}][ERROR][/{C_ERROR}] {e}")
         except KeyboardInterrupt:
@@ -1501,13 +1778,9 @@ def interactive_menu():
 
 
 def _launch_web(port: int = 5000):
-    import subprocess
-    import sys
-    venv_python = Path(__file__).parent / "venv" / "bin" / "python"
-    py = str(venv_python) if venv_python.exists() else sys.executable
     console.print(f"[{C_SUCCESS}]Launching Web UI at http://localhost:{port}... (Press Ctrl+C to quit)[/{C_SUCCESS}]")
     try:
-        subprocess.run([py, "-m", "web.app", "--port", str(port)])
+        cmd_web(port, skip_banner=True)
     except KeyboardInterrupt:
         console.print(f"\n[{C_DIM}]Web UI stopped.[/{C_DIM}]")
 
@@ -1526,6 +1799,54 @@ def cmd_init():
     console.print(f"[{C_INFO}]Force resolving and syncing offline assets...[/{C_INFO}]")
     sysmgr.bootstrap_if_needed(force=True)
     console.print(f"[{C_SUCCESS}]Initialization complete.[/{C_SUCCESS}]")
+
+
+@app.command("update", help="Check GitHub for newer releases and update when possible")
+def cmd_update(
+    check_only: bool = typer.Option(False, "--check-only", help="Only check for updates"),
+    yes: bool = typer.Option(False, "-y", "--yes", help="Apply/download update without confirmation"),
+):
+    try:
+        probe = op_update(check_only=True, auto_apply=False)
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError, ValueError) as e:
+        console.print(f"[{C_ERROR}][ERROR][/{C_ERROR}] Update check failed: {e}")
+        raise typer.Exit(1)
+
+    console.print(f"[{C_INFO}]Current version:[/{C_INFO}] {probe.get('current', 'unknown')}")
+    console.print(f"[{C_INFO}]Latest release:[/{C_INFO}] {probe.get('latest', 'unknown')}")
+
+    if not probe.get("update_available"):
+        console.print(f"[{C_SUCCESS}]You are up to date.[/{C_SUCCESS}]")
+        return
+
+    console.print(f"[{C_WARN}]Update available.[/{C_WARN}] {probe.get('release_url', '')}")
+    if check_only:
+        return
+
+    auto_apply = bool(getattr(sys, "frozen", False)) and platform.system() != "Windows"
+    if not yes:
+        if not sys.stdin.isatty():
+            console.print(f"[{C_WARN}]Non-interactive terminal detected. Re-run with --yes to apply/download.[/{C_WARN}]")
+            raise typer.Exit(1)
+        prompt = "Apply update now" if auto_apply else "Download latest update asset now"
+        if not Confirm.ask(f"[{C_ACCENT}]{prompt}?[/{C_ACCENT}]", default=True):
+            return
+
+    try:
+        result = op_update(check_only=False, auto_apply=auto_apply)
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError, ValueError) as e:
+        console.print(f"[{C_ERROR}][ERROR][/{C_ERROR}] Update failed: {e}")
+        raise typer.Exit(1)
+
+    if result.get("applied"):
+        console.print(f"[{C_SUCCESS}]Update applied successfully.[/{C_SUCCESS}]")
+        console.print(f"[{C_DIM}]Restart StegoForge to run the new version.[/{C_DIM}]")
+    elif result.get("downloaded_path"):
+        console.print(f"[{C_SUCCESS}]Update downloaded:[/{C_SUCCESS}] {result['downloaded_path']}")
+        if platform.system() == "Windows" and getattr(sys, "frozen", False):
+            console.print(f"[{C_DIM}]Windows blocks replacing a running executable. Close app and replace manually.[/{C_DIM}]")
+    else:
+        console.print(f"[{C_WARN}]No suitable update asset could be downloaded automatically.[/{C_WARN}]")
 
 
 @app.command("encode", help="Embed a payload into a carrier file")
@@ -1979,8 +2300,10 @@ def deadrop_keyx_complete(
 @app.command("web", help="Launch the local web UI")
 def cmd_web(
     port: int = typer.Option(5000, "--port", help="Port to bind (default: 5000)"),
+    skip_banner: bool = typer.Option(False, "--skip-banner", help="Skip printing the banner"),
 ):
-    print_banner()
+    if not skip_banner:
+        print_banner()
     try:
         from web.app import create_app
         flask_app = create_app()

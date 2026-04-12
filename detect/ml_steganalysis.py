@@ -13,8 +13,6 @@ from __future__ import annotations
 import io
 import os
 import sys
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 import numpy as np
@@ -22,14 +20,36 @@ from PIL import Image
 
 from detect.base import BaseDetector, DetectionResult
 
-MODEL_NAME = "srnet_lite.onnx"
-HF_REPO_ID = os.getenv("STEGOFORGE_ML_HF_REPO", "onnx-community/mobilenetv2-12-onnx").strip()
-HF_FILENAME = os.getenv("STEGOFORGE_ML_HF_FILE", "model.onnx").strip()
-HF_TOKEN = os.getenv("HF_TOKEN", "").strip() or None
-MODEL_URLS = [u for u in [
-    f"https://huggingface.co/{HF_REPO_ID}/resolve/main/{HF_FILENAME}",
-    os.getenv("STEGOFORGE_ML_MODEL_URL", "").strip(),
-] if u]
+MODEL_BUNDLED_REL = Path(os.getenv("STEGOFORGE_ML_BUNDLED_MODEL", "models/model_quantized.onnx").strip())
+MODEL_NAME = MODEL_BUNDLED_REL.name or "model_quantized.onnx"
+
+
+def bundled_model_paths() -> list[Path]:
+    candidates: list[Path] = []
+
+    # Source tree location (repo checkout).
+    candidates.append((Path(__file__).resolve().parent.parent / MODEL_BUNDLED_REL).resolve())
+
+    # PyInstaller onefile extraction dir.
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append((Path(meipass) / MODEL_BUNDLED_REL).resolve())
+
+    # Side-by-side next to executable/script.
+    try:
+        candidates.append((Path(sys.argv[0]).resolve().parent / MODEL_BUNDLED_REL).resolve())
+    except Exception:
+        pass
+
+    # Keep order but remove duplicates.
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for p in candidates:
+        key = str(p)
+        if key not in seen:
+            deduped.append(p)
+            seen.add(key)
+    return deduped
 
 
 class MLSteganalysisDetector(BaseDetector):
@@ -55,20 +75,20 @@ class MLSteganalysisDetector(BaseDetector):
                 file_bytes,
                 classical,
                 reason=(
-                    "Model unavailable (Hugging Face download failed)"
+                    "Model unavailable (bundled model not found)"
                     if not self._last_model_error
                     else f"Model unavailable: {self._last_model_error}"
                 ),
                 install=(
-                    "Install onnxruntime and ensure Hugging Face access. "
-                    f"Default source: {HF_REPO_ID}/{HF_FILENAME}. "
-                    "Optional: set STEGOFORGE_ML_HF_REPO, STEGOFORGE_ML_HF_FILE, or HF_TOKEN"
+                    "Install onnxruntime and ensure bundled model exists at "
+                    f"{MODEL_BUNDLED_REL.as_posix()}"
                 ),
             )
 
         try:
             sess = ort.InferenceSession(str(model_path), providers=["CPUExecutionProvider"])
             input_meta = sess.get_inputs()[0]
+            self._validate_session(sess)
             input_name = input_meta.name
             x = self._preprocess(file_bytes, input_meta.shape)
             raw = sess.run(None, {input_name: x})[0]
@@ -89,7 +109,7 @@ class MLSteganalysisDetector(BaseDetector):
                     "verdict": verdict,
                     "hints": hints,
                     "model": MODEL_NAME,
-                    "model_source": "huggingface",
+                    "model_source": "bundled",
                     "skipped": False,
                     "interpretation": f"ML detector verdict: {verdict}",
                 },
@@ -99,6 +119,22 @@ class MLSteganalysisDetector(BaseDetector):
                 file_bytes,
                 classical,
                 reason=f"ONNX inference failed: {exc}",
+            )
+
+    def _validate_session(self, sess) -> None:
+        outputs = sess.get_outputs()
+        if not outputs:
+            raise ValueError("ONNX model has no outputs")
+
+        shape = outputs[0].shape
+        # Expected binary steganalysis heads are usually [N,1] or [N,2].
+        if len(shape) < 2:
+            return
+
+        cls_dim = shape[-1]
+        if isinstance(cls_dim, int) and cls_dim > 2:
+            raise ValueError(
+                f"Incompatible ONNX model output shape {shape}; expected binary steganalysis head"
             )
 
     def _shape_dim(self, shape_value, default: int) -> int:
@@ -143,33 +179,12 @@ class MLSteganalysisDetector(BaseDetector):
         probs = exps / max(float(np.sum(exps)), 1e-9)
         return float(np.clip(float(np.max(probs)), 0.0, 1.0))
 
-    def _download_with_progress(self, url: str, model_path: Path, token: str | None = None) -> bool:
-        headers = {"User-Agent": "StegoForge/1.0"}
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=60) as resp, model_path.open("wb") as out:
-            total = int(resp.headers.get("Content-Length", "0") or "0")
-            downloaded = 0
-            chunk_size = 1024 * 1024
-
-            while True:
-                chunk = resp.read(chunk_size)
-                if not chunk:
-                    break
-                out.write(chunk)
-                downloaded += len(chunk)
-                if total > 0:
-                    pct = int(downloaded * 100 / total)
-                    print(
-                        f"[StegoForge ML] Downloading model from Hugging Face: {pct}%",
-                        file=sys.stderr,
-                        flush=True,
-                    )
-        return model_path.exists() and model_path.stat().st_size > 0
-
     def _ensure_model(self) -> Path | None:
+        # Preferred path: bundled offline model shipped with repo/release.
+        for bundled in bundled_model_paths():
+            if bundled.exists() and bundled.stat().st_size > 0:
+                return bundled
+
         try:
             from core import sysmgr
             sys_model = sysmgr.MODELS_DIR / MODEL_NAME
@@ -184,38 +199,7 @@ class MLSteganalysisDetector(BaseDetector):
         model_path = model_dir / MODEL_NAME
         if model_path.exists() and model_path.stat().st_size > 0:
             return model_path
-
-        # Preferred path: Hugging Face Hub API (handles LFS-backed files).
-        try:
-            from huggingface_hub import hf_hub_download  # type: ignore
-
-            print(
-                f"[StegoForge ML] Downloading model from Hugging Face repo {HF_REPO_ID}/{HF_FILENAME}",
-                file=sys.stderr,
-                flush=True,
-            )
-            downloaded = hf_hub_download(
-                repo_id=HF_REPO_ID,
-                filename=HF_FILENAME,
-                token=HF_TOKEN,
-                local_dir=str(model_dir),
-            )
-            src = Path(downloaded)
-            if src != model_path:
-                model_path.write_bytes(src.read_bytes())
-            if model_path.exists() and model_path.stat().st_size > 0:
-                return model_path
-        except Exception as exc:
-            self._last_model_error = f"hf_hub_download failed: {exc}"
-
-        # Fallback path: direct Hugging Face resolve URL(s).
-        for url in MODEL_URLS:
-            try:
-                if self._download_with_progress(url, model_path, token=HF_TOKEN):
-                    return model_path
-            except (urllib.error.HTTPError, urllib.error.URLError, OSError) as exc:
-                self._last_model_error = str(exc)
-                continue
+        self._last_model_error = f"Bundled model not found. Expected file: {MODEL_BUNDLED_REL.as_posix()}"
         return None
 
     def _heuristic_fallback(self, file_bytes: bytes, classical: dict, reason: str, install: str | None = None) -> DetectionResult:
@@ -242,6 +226,8 @@ class MLSteganalysisDetector(BaseDetector):
             "fallback_reason": reason,
             "interpretation": f"Heuristic ML fallback verdict: {verdict}",
         }
+        if "Incompatible ONNX model" in reason:
+            details["model_validation"] = "rejected-non-binary-output"
         if install:
             details["install"] = install
 
