@@ -6,6 +6,7 @@ Tier B: optional LLM-assisted generation hook (best-effort local/compatible API)
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import struct
@@ -38,15 +39,28 @@ SYNONYM_PAIRS = [
     ("choice", "option"), ("route", "path"), ("merge", "combine"), ("split", "divide"),
 ]
 
-BIT_FOR = {}
-for a, b in SYNONYM_PAIRS:
-    BIT_FOR[a] = 0
-    BIT_FOR[b] = 1
 
-PAIR_BY_TOKEN = {}
-for a, b in SYNONYM_PAIRS:
-    PAIR_BY_TOKEN[a] = (a, b)
-    PAIR_BY_TOKEN[b] = (a, b)
+def _build_unique_pair_maps():
+    token_counts = {}
+    for a, b in SYNONYM_PAIRS:
+        token_counts[a] = token_counts.get(a, 0) + 1
+        token_counts[b] = token_counts.get(b, 0) + 1
+
+    pair_by_token = {}
+    bit_for = {}
+    for a, b in SYNONYM_PAIRS:
+        # Ignore ambiguous tokens that participate in multiple synonym pairs,
+        # otherwise key-ordered decode can diverge from encode.
+        if token_counts[a] != 1 or token_counts[b] != 1:
+            continue
+        pair_by_token[a] = (a, b)
+        pair_by_token[b] = (a, b)
+        bit_for[a] = 0
+        bit_for[b] = 1
+    return pair_by_token, bit_for
+
+
+PAIR_BY_TOKEN, BIT_FOR = _build_unique_pair_maps()
 
 
 class LinguisticEncoder(BaseEncoder):
@@ -71,14 +85,17 @@ class LinguisticEncoder(BaseEncoder):
         bits = _bytes_to_bits(data)
 
         tokens = WORD_RE.findall(cover)
+        ordered_positions = self._ordered_positions(tokens, kwargs.get("key"))
         bit_idx = 0
-        for i, tok in enumerate(tokens):
+        for i in ordered_positions:
+            tok = tokens[i]
             key = tok.lower()
-            if key in PAIR_BY_TOKEN and bit_idx < len(bits):
-                zero, one = PAIR_BY_TOKEN[key]
-                target = zero if bits[bit_idx] == 0 else one
-                tokens[i] = _match_case(tok, target)
-                bit_idx += 1
+            if bit_idx >= len(bits):
+                break
+            zero, one = PAIR_BY_TOKEN[key]
+            target = zero if bits[bit_idx] == 0 else one
+            tokens[i] = _match_case(tok, target)
+            bit_idx += 1
 
         if bit_idx < len(bits):
             raise ValueError("Cover text does not contain enough eligible synonym tokens")
@@ -87,11 +104,13 @@ class LinguisticEncoder(BaseEncoder):
 
     def decode(self, stego_bytes: bytes, **kwargs) -> bytes:
         text = stego_bytes.decode("utf-8", errors="replace")
+        tokens = WORD_RE.findall(text)
+        ordered_positions = self._ordered_positions(tokens, kwargs.get("key"))
         bits = []
-        for tok in WORD_RE.findall(text):
+        for i in ordered_positions:
+            tok = tokens[i]
             key = tok.lower()
-            if key in BIT_FOR:
-                bits.append(BIT_FOR[key])
+            bits.append(BIT_FOR[key])
 
         if len(bits) < HEADER_SIZE * 8:
             raise ValueError("No linguistic payload header found")
@@ -109,6 +128,39 @@ class LinguisticEncoder(BaseEncoder):
     def _eligible_positions(self, text: str) -> list[int]:
         toks = WORD_RE.findall(text)
         return [i for i, tok in enumerate(toks) if tok.lower() in PAIR_BY_TOKEN]
+
+    def _ordered_positions(self, tokens: list[str], key: str | None) -> list[int]:
+        eligible = [i for i, tok in enumerate(tokens) if tok.lower() in PAIR_BY_TOKEN]
+        if not eligible:
+            return []
+
+        # Cost heuristic:
+        # - prefer synonym pairs that appear frequently in the cover text
+        # - avoid changing title/upper-case words first (usually stylistic)
+        pair_counts = {}
+        for idx in eligible:
+            t = tokens[idx].lower()
+            pair = PAIR_BY_TOKEN[t]
+            pair_counts[pair] = pair_counts.get(pair, 0) + 1
+
+        ranked = []
+        for idx in eligible:
+            tok = tokens[idx]
+            pair = PAIR_BY_TOKEN[tok.lower()]
+            count = pair_counts.get(pair, 1)
+            case_penalty = 0.15 if (tok.istitle() or tok.isupper()) else 0.0
+            base_cost = (1.0 / float(count)) + case_penalty
+            tie = self._position_tiebreak(key, idx)
+            ranked.append((base_cost, tie, idx))
+
+        ranked.sort(key=lambda x: (x[0], x[1]))
+        return [x[2] for x in ranked]
+
+    @staticmethod
+    def _position_tiebreak(key: str | None, index: int) -> int:
+        seed = (key or "stegoforge").encode("utf-8")
+        digest = hashlib.sha256(seed + b":" + str(index).encode("ascii")).digest()
+        return int.from_bytes(digest[:8], "big")
 
     def _generate_cover_with_llm(self, topic: str, llm_model: str, fallback_cover: str) -> str:
         # Optional best-effort hook for OpenAI-compatible local endpoint.

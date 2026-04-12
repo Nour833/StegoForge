@@ -27,6 +27,13 @@ def test_capacity():
     print(f"  DCT capacity: {cap:,} bytes")
 
 
+def test_jnd_safe_capacity_is_bounded():
+    carrier = CARRIER.read_bytes()
+    cap = encoder.capacity(carrier)
+    jnd = encoder.jnd_safe_capacity(carrier)
+    assert 0 <= jnd <= cap
+
+
 def test_payload_too_large():
     carrier = CARRIER.read_bytes()
     cap = encoder.capacity(carrier)

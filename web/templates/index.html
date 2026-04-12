@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>StegoForge — Steganography Toolkit</title>
 <meta name="description" content="StegoForge: Hide secrets in images, audio, and documents. Detect hidden data. Full steganography toolkit.">
+<link rel="icon" type="image/svg+xml" href="/static/stegoforge-favicon.svg">
+<link rel="shortcut icon" type="image/svg+xml" href="/static/stegoforge-favicon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/style.css">
@@ -105,29 +107,54 @@
     <div class="form-group">
       <label class="form-label">
         Encoding Method
-        <span class="label-hint">Pill selector with forensic resistance guidance</span>
+        <span class="label-hint">Grouped by carrier family with hybrid methods up front</span>
       </label>
       <input type="hidden" id="enc-method" name="method" value="">
-      <div class="method-pills" id="enc-method-pills">
-        <button type="button" class="method-pill selected" data-method="" data-desc="Auto select based on carrier type." data-rating="Balanced">AUTO</button>
-        <button type="button" class="method-pill" data-method="adaptive-lsb" data-desc="Adaptive content-aware embedding; best against chi-square/RS." data-rating="High">ADAPTIVE-LSB ★</button>
-        <button type="button" class="method-pill" data-method="lsb" data-desc="Classic pixel LSB on PNG/BMP." data-rating="Low">LSB</button>
-        <button type="button" class="method-pill" data-method="dct" data-desc="JPEG frequency domain embedding." data-rating="Medium">DCT</button>
-        <button type="button" class="method-pill" data-method="fingerprint-lsb" data-desc="PRNU-aware embedding for camera-origin images." data-rating="High">FINGERPRINT-LSB</button>
-        <button type="button" class="method-pill" data-method="alpha" data-desc="Transparency channel embedding." data-rating="Medium">ALPHA</button>
-        <button type="button" class="method-pill" data-method="palette" data-desc="Palette index order carrier." data-rating="Medium">PALETTE</button>
-        <button type="button" class="method-pill" data-method="video-dct" data-desc="Keyframe-focused video embedding." data-rating="Medium">VIDEO-DCT</button>
-        <button type="button" class="method-pill" data-method="video-motion" data-desc="P-frame motion-style video embedding." data-rating="Medium">VIDEO-MOTION</button>
-        <button type="button" class="method-pill" data-method="audio-lsb" data-desc="PCM sample LSB embedding." data-rating="Medium">AUDIO-LSB</button>
-        <button type="button" class="method-pill" data-method="phase" data-desc="Audio phase coding." data-rating="Medium">PHASE</button>
-        <button type="button" class="method-pill" data-method="spectrogram" data-desc="Spectral-domain audio embedding." data-rating="Medium">SPECTROGRAM</button>
-        <button type="button" class="method-pill" data-method="unicode" data-desc="Zero-width unicode in text." data-rating="Medium">UNICODE</button>
-        <button type="button" class="method-pill" data-method="linguistic" data-desc="Synonym-channel natural text embedding." data-rating="High">LINGUISTIC</button>
-        <button type="button" class="method-pill" data-method="pdf" data-desc="PDF metadata/stream embedding." data-rating="Medium">PDF</button>
-        <button type="button" class="method-pill" data-method="docx" data-desc="Office XML stream embedding." data-rating="Medium">DOCX</button>
-        <button type="button" class="method-pill" data-method="xlsx" data-desc="Office XML stream embedding." data-rating="Medium">XLSX</button>
+      <div class="method-groups" id="enc-method-pills">
+        <div class="method-group">
+          <div class="method-group-title">Auto + Hybrid</div>
+          <div class="method-pills">
+            <button type="button" class="method-pill selected" data-method="" data-desc="Auto-select based on carrier type and stealth defaults." data-rating="Balanced">AUTO</button>
+            <button type="button" class="method-pill" data-method="adaptive-lsb" data-desc="Adaptive content-aware embedding; strongest against chi-square and RS." data-rating="High">ADAPTIVE-LSB <span class="method-pill-badge">HYBRID</span></button>
+            <button type="button" class="method-pill" data-method="fingerprint-lsb" data-desc="PRNU-aware embedding for camera-origin images." data-rating="High">FINGERPRINT-LSB <span class="method-pill-badge">HYBRID</span></button>
+            <button type="button" class="method-pill" data-method="video-motion" data-desc="Texture + temporal-cost ranked video motion embedding." data-rating="High">VIDEO-MOTION <span class="method-pill-badge">HYBRID</span></button>
+            <button type="button" class="method-pill" data-method="linguistic" data-desc="Natural-language synonym channel with context-preserving substitutions." data-rating="High">LINGUISTIC <span class="method-pill-badge">HYBRID</span></button>
+          </div>
+        </div>
+        <div class="method-group">
+          <div class="method-group-title">Image</div>
+          <div class="method-pills">
+            <button type="button" class="method-pill" data-method="lsb" data-desc="Classic pixel LSB on PNG/BMP." data-rating="Low">LSB</button>
+            <button type="button" class="method-pill" data-method="dct" data-desc="JPEG frequency-domain embedding." data-rating="Medium">DCT</button>
+            <button type="button" class="method-pill" data-method="alpha" data-desc="Transparency-channel embedding for PNG/WebP." data-rating="Medium">ALPHA</button>
+            <button type="button" class="method-pill" data-method="palette" data-desc="Palette-index order embedding for GIF/indexed PNG." data-rating="Medium">PALETTE</button>
+          </div>
+        </div>
+        <div class="method-group">
+          <div class="method-group-title">Video</div>
+          <div class="method-pills">
+            <button type="button" class="method-pill" data-method="video-dct" data-desc="Keyframe-focused block-domain embedding." data-rating="Medium">VIDEO-DCT</button>
+          </div>
+        </div>
+        <div class="method-group">
+          <div class="method-group-title">Audio</div>
+          <div class="method-pills">
+            <button type="button" class="method-pill" data-method="audio-lsb" data-desc="Cost-ranked PCM sample LSB embedding." data-rating="Medium">AUDIO-LSB</button>
+            <button type="button" class="method-pill" data-method="phase" data-desc="Segment phase coding for compressed-audio robustness." data-rating="Medium">PHASE</button>
+            <button type="button" class="method-pill" data-method="spectrogram" data-desc="Spectral-domain audio embedding." data-rating="Medium">SPECTROGRAM</button>
+          </div>
+        </div>
+        <div class="method-group">
+          <div class="method-group-title">Document</div>
+          <div class="method-pills">
+            <button type="button" class="method-pill" data-method="unicode" data-desc="Adaptive zero-width unicode insertion in text." data-rating="Medium">UNICODE</button>
+            <button type="button" class="method-pill" data-method="pdf" data-desc="PDF metadata/stream embedding." data-rating="Medium">PDF</button>
+            <button type="button" class="method-pill" data-method="docx" data-desc="Office XML stream embedding for DOCX." data-rating="Medium">DOCX</button>
+            <button type="button" class="method-pill" data-method="xlsx" data-desc="Office XML stream embedding for XLSX." data-rating="Medium">XLSX</button>
+          </div>
+        </div>
       </div>
-      <div class="method-description" id="method-desc"></div>
+      <div class="method-description" id="method-desc">Auto mode picks a carrier-aware default. Hybrid methods prioritize stealth over raw capacity.</div>
     </div>
 
     <!-- Live Capacity Matrix -->
@@ -257,21 +284,32 @@
       </label>
       <select id="dec-method" name="method" class="form-select">
         <option value="">Auto-detect</option>
-        <option value="lsb">LSB</option>
-        <option value="adaptive-lsb">Adaptive LSB</option>
-        <option value="dct">DCT (JPEG)</option>
-        <option value="video-dct">Video DCT</option>
-        <option value="video-motion">Video Motion</option>
-        <option value="alpha">Alpha Channel</option>
-        <option value="palette">Palette</option>
-        <option value="fingerprint-lsb">Fingerprint LSB</option>
-        <option value="audio-lsb">Audio LSB</option>
-        <option value="phase">Phase</option>
-        <option value="unicode">Unicode</option>
-        <option value="linguistic">Linguistic</option>
-        <option value="pdf">PDF</option>
-        <option value="docx">DOCX</option>
-        <option value="xlsx">XLSX</option>
+        <optgroup label="Hybrid">
+          <option value="adaptive-lsb">Adaptive LSB</option>
+          <option value="fingerprint-lsb">Fingerprint LSB</option>
+          <option value="video-motion">Video Motion</option>
+          <option value="linguistic">Linguistic</option>
+        </optgroup>
+        <optgroup label="Image">
+          <option value="lsb">LSB</option>
+          <option value="dct">DCT (JPEG)</option>
+          <option value="alpha">Alpha Channel</option>
+          <option value="palette">Palette</option>
+        </optgroup>
+        <optgroup label="Video">
+          <option value="video-dct">Video DCT</option>
+        </optgroup>
+        <optgroup label="Audio">
+          <option value="audio-lsb">Audio LSB</option>
+          <option value="phase">Phase</option>
+          <option value="spectrogram">Spectrogram</option>
+        </optgroup>
+        <optgroup label="Document">
+          <option value="unicode">Unicode</option>
+          <option value="pdf">PDF</option>
+          <option value="docx">DOCX</option>
+          <option value="xlsx">XLSX</option>
+        </optgroup>
       </select>
     </div>
 

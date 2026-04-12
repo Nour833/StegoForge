@@ -3,13 +3,16 @@ core/binary/elf.py - ELF slack/notes carrier encoder.
 """
 from __future__ import annotations
 
+import hashlib
 import struct
+import numpy as np
 
 from core.base import BaseEncoder
 
 MAGIC = b"SFEL"
 HEADER_FMT = ">4sI"
 HEADER_SIZE = struct.calcsize(HEADER_FMT)
+BITS_PER_BYTE = 2
 
 
 class ELFEncoder(BaseEncoder):
@@ -19,7 +22,7 @@ class ELFEncoder(BaseEncoder):
     def capacity(self, carrier_bytes: bytes, **kwargs) -> int:
         regions = parse_elf_regions(carrier_bytes)
         total = sum(max(0, end - start) for start, end, _ in regions)
-        return max(0, total - HEADER_SIZE)
+        return max(0, (total * BITS_PER_BYTE // 8) - HEADER_SIZE)
 
     def encode(self, carrier_bytes: bytes, payload_bytes: bytes, **kwargs) -> bytes:
         if not carrier_bytes.startswith(b"\x7fELF"):
@@ -30,17 +33,27 @@ class ELFEncoder(BaseEncoder):
             raise ValueError(f"Payload too large: {len(payload_bytes)} bytes, ELF capacity: {cap} bytes")
 
         data = struct.pack(HEADER_FMT, MAGIC, len(payload_bytes)) + payload_bytes
+        bits = _bytes_to_bits(data)
         out = bytearray(carrier_bytes)
-        written = 0
+        key = kwargs.get("key")
+        positions = _ordered_positions(parse_elf_regions(carrier_bytes), key)
 
-        for start, end, _ in parse_elf_regions(carrier_bytes):
-            if written >= len(data):
+        if len(bits) > len(positions) * BITS_PER_BYTE:
+            raise ValueError("ELF slack regions were insufficient to embed payload")
+
+        bit_idx = 0
+        mask = 0xFF ^ ((1 << BITS_PER_BYTE) - 1)
+        for pos in positions:
+            if bit_idx >= len(bits):
                 break
-            n = min(end - start, len(data) - written)
-            out[start:start + n] = data[written:written + n]
-            written += n
+            chunk = bits[bit_idx:bit_idx + BITS_PER_BYTE]
+            while len(chunk) < BITS_PER_BYTE:
+                chunk.append(0)
+            val = _bits_to_int(chunk)
+            out[pos] = (out[pos] & mask) | val
+            bit_idx += BITS_PER_BYTE
 
-        if written < len(data):
+        if bit_idx < len(bits):
             raise ValueError("ELF slack regions were insufficient to embed payload")
         return bytes(out)
 
@@ -48,19 +61,39 @@ class ELFEncoder(BaseEncoder):
         if not stego_bytes.startswith(b"\x7fELF"):
             raise ValueError("Input is not a valid ELF binary")
 
-        data = _read_from_regions(stego_bytes, parse_elf_regions(stego_bytes), HEADER_SIZE)
-        if len(data) < HEADER_SIZE:
+        regions = parse_elf_regions(stego_bytes)
+        positions = _ordered_positions(regions, kwargs.get("key"))
+
+        header_bits_needed = HEADER_SIZE * 8
+        bits = []
+        for pos in positions:
+            if len(bits) >= header_bits_needed:
+                break
+            v = stego_bytes[pos]
+            for b in range(BITS_PER_BYTE - 1, -1, -1):
+                bits.append((v >> b) & 1)
+
+        if len(bits) < header_bits_needed:
             raise ValueError("No embedded ELF payload header found")
 
-        magic, length = struct.unpack(HEADER_FMT, data)
+        header = _bits_to_bytes(bits[:header_bits_needed])
+        magic, length = struct.unpack(HEADER_FMT, header)
         if magic != MAGIC or length <= 0:
             raise ValueError("No StegoForge ELF payload found")
 
-        payload = _read_from_regions(stego_bytes, parse_elf_regions(stego_bytes), HEADER_SIZE + length)
-        payload = payload[HEADER_SIZE:HEADER_SIZE + length]
+        total_bits = (HEADER_SIZE + length) * 8
+        bits = []
+        for pos in positions:
+            if len(bits) >= total_bits:
+                break
+            v = stego_bytes[pos]
+            for b in range(BITS_PER_BYTE - 1, -1, -1):
+                bits.append((v >> b) & 1)
+
+        payload = _bits_to_bytes(bits[HEADER_SIZE * 8:total_bits])
         if len(payload) < length:
             raise ValueError("Incomplete ELF payload data")
-        return payload
+        return payload[:length]
 
 
 def parse_elf_regions(data: bytes):
@@ -125,4 +158,53 @@ def _read_from_regions(data: bytes, regions, size: int) -> bytes:
             break
         take = min(end - start, size - len(out))
         out.extend(data[start:start + take])
+    return bytes(out)
+
+
+def _ordered_positions(regions, key: str | None):
+    weighted = []
+    for start, end, region_type in regions:
+        region_len = max(0, end - start)
+        if region_len == 0:
+            continue
+        base_cost = 0.3 if region_type == "section_padding" else 0.8
+        weighted.append((start, end, region_type, base_cost, region_len))
+
+    weighted.sort(key=lambda x: (x[3], -x[4], x[0]))
+    positions = []
+    for start, end, _, _, _ in weighted:
+        positions.extend(range(start, end))
+
+    if not key or not positions:
+        return positions
+
+    seed = int.from_bytes(hashlib.sha256(key.encode("utf-8")).digest()[:8], "big")
+    rng = np.random.default_rng(seed)
+    arr = np.array(positions, dtype=np.int64)
+    rng.shuffle(arr)
+    return arr.tolist()
+
+
+def _bytes_to_bits(data: bytes) -> list[int]:
+    bits = []
+    for byte in data:
+        for i in range(7, -1, -1):
+            bits.append((byte >> i) & 1)
+    return bits
+
+
+def _bits_to_int(bits: list[int]) -> int:
+    v = 0
+    for b in bits:
+        v = (v << 1) | b
+    return v
+
+
+def _bits_to_bytes(bits: list[int]) -> bytes:
+    out = []
+    for i in range(0, len(bits) - 7, 8):
+        v = 0
+        for b in bits[i:i + 8]:
+            v = (v << 1) | b
+        out.append(v)
     return bytes(out)

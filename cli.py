@@ -187,6 +187,25 @@ ENCODE_METHODS = {
     "timing-covert":("Network",  "Timing covert channel (CLI only, authorized use only)"),
 }
 
+HYBRID_METHODS = {
+    "adaptive-lsb",
+    "fingerprint-lsb",
+    "video-motion",
+    "linguistic",
+}
+
+METHOD_CATEGORY_ORDER = ["Hybrid", "Image", "Video", "Audio", "Document", "Binary", "Network"]
+
+
+def _group_encode_methods() -> list[tuple[str, list[tuple[str, str, str]]]]:
+    grouped: dict[str, list[tuple[str, str, str]]] = {cat: [] for cat in METHOD_CATEGORY_ORDER}
+    for method, (category, desc) in ENCODE_METHODS.items():
+        if method in HYBRID_METHODS:
+            grouped["Hybrid"].append((method, category, desc))
+        else:
+            grouped.setdefault(category, []).append((method, category, desc))
+    return [(cat, grouped[cat]) for cat in METHOD_CATEGORY_ORDER if grouped.get(cat)]
+
 DECODE_METHODS = {k: v for k, v in ENCODE_METHODS.items()}
 
 EXT_TO_METHOD = {
@@ -1199,20 +1218,31 @@ def interactive_encode():
     key = Prompt.ask(f"  [{C_ACCENT}]Encryption key[/{C_ACCENT}] (passphrase)", password=True)
 
     # Show method options
-    console.print(f"\n  [dim]Available methods:[/dim]")
+    console.print(f"\n  [dim]Available methods grouped by category (hybrid-first):[/dim]")
     auto_method = auto_detect_method(carrier)
     if Path(carrier).suffix.lower() in (".png", ".bmp", ".webp"):
         auto_method = "adaptive-lsb"
-    for i, (m, (cat, desc)) in enumerate(ENCODE_METHODS.items(), 1):
-        marker = f"[{C_SUCCESS}] ✓ auto[/{C_SUCCESS}]" if m == auto_method else ""
-        console.print(f"    [{C_DIM}]{i:2}.[/{C_DIM}] [{C_ACCENT}]{m:12}[/{C_ACCENT}] {desc} {marker}")
+
+    method_names: list[str] = []
+    index = 1
+    for category, methods in _group_encode_methods():
+        console.print(f"    [{C_INFO}]{category}[/{C_INFO}]")
+        for m, source_category, desc in methods:
+            marker = f"[{C_SUCCESS}] ✓ auto[/{C_SUCCESS}]" if m == auto_method else ""
+            hybrid_note = f"[{C_GOLD}]hybrid[/{C_GOLD}] · " if category == "Hybrid" else ""
+            console.print(
+                f"      [{C_DIM}]{index:2}.[/{C_DIM}] "
+                f"[{C_ACCENT}]{m:14}[/{C_ACCENT}] "
+                f"{hybrid_note}{source_category}: {desc} {marker}"
+            )
+            method_names.append(m)
+            index += 1
 
     method_input = Prompt.ask(
         f"\n  [{C_ACCENT}]Method[/{C_ACCENT}] (name or number, Enter for auto)",
         default=auto_method,
     )
     # Resolve numeric input
-    method_names = list(ENCODE_METHODS.keys())
     if method_input.isdigit():
         idx = int(method_input) - 1
         method = method_names[idx] if 0 <= idx < len(method_names) else auto_method

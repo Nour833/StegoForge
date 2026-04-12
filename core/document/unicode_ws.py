@@ -21,6 +21,7 @@ Wire format embedded in text:
 Special carrier: if carrier has no spaces, inserts at every 10th character.
 """
 import io
+import hashlib
 from core.base import BaseEncoder
 
 ZWSP = "\u200B"   # zero-width space — encodes bit 0
@@ -43,7 +44,7 @@ class UnicodeWSEncoder(BaseEncoder):
         # Each insertion point holds 9 ZW chars = 1 byte
         return max(0, n_spaces - HEADER_BYTES)
 
-    def encode(self, carrier_bytes: bytes, payload_bytes: bytes, **kwargs) -> bytes:
+    def encode(self, carrier_bytes: bytes, payload_bytes: bytes, key: str | None = None, **kwargs) -> bytes:
         text = carrier_bytes.decode("utf-8", errors="replace")
         n_spaces = text.count(" ")
         use_nth = n_spaces > 0
@@ -60,20 +61,69 @@ class UnicodeWSEncoder(BaseEncoder):
         # Build byte-level chunks: each byte → a 9-char ZW sequence
         byte_chunks = _encode_bytes_to_chunks(data)  # list of 9-char strings
 
+        points = self._insertion_points(text, use_nth)
+        if len(points) < len(byte_chunks):
+            raise ValueError("Carrier does not provide enough insertion points for payload")
+
+        ranked = self._rank_points(text, points, key)
+        selected = sorted(ranked[:len(byte_chunks)])
+        selected_set = set(selected)
+
         result = []
         chunk_idx = 0
         char_count = 0
 
         for ch in text:
             result.append(ch)
-            if chunk_idx < len(byte_chunks):
-                insertion_point = (ch == " ") if use_nth else (char_count % 10 == 9)
-                if insertion_point:
+            if chunk_idx < len(byte_chunks) and (char_count in selected_set):
                     result.append(byte_chunks[chunk_idx])
                     chunk_idx += 1
             char_count += 1
 
         return "".join(result).encode("utf-8")
+
+    def _insertion_points(self, text: str, use_nth: bool) -> list[int]:
+        points = []
+        if use_nth:
+            for i, ch in enumerate(text):
+                if ch == " ":
+                    points.append(i)
+        else:
+            for i in range(9, len(text), 10):
+                points.append(i)
+        return points
+
+    def _rank_points(self, text: str, points: list[int], key: str | None) -> list[int]:
+        scores = []
+        punct = set(".,;:!?")
+        for p in points:
+            prev_ch = text[p - 1] if p > 0 else ""
+            next_ch = text[p + 1] if (p + 1) < len(text) else ""
+            score = 0.0
+
+            # Prefer natural boundary-like spots where invisible markers blend better.
+            if prev_ch in punct:
+                score += 3.0
+            if next_ch and next_ch.isupper():
+                score += 1.0
+            if prev_ch.isalnum() and next_ch.isalnum():
+                score += 0.8
+            if prev_ch.isdigit() or next_ch.isdigit():
+                score -= 0.5
+
+            scores.append(score)
+
+        if key:
+            seed = int.from_bytes(hashlib.sha256(key.encode("utf-8")).digest()[:8], "big")
+        else:
+            seed = 0
+        import numpy as np
+        rng = np.random.default_rng(seed)
+        ties = rng.random(len(points), dtype=np.float32)
+
+        # Highest score first, tie-broken by seeded noise for diffusion.
+        order = np.lexsort((ties, -np.array(scores, dtype=np.float32)))
+        return [points[i] for i in order]
 
     def decode(self, stego_bytes: bytes, **kwargs) -> bytes:
         text = stego_bytes.decode("utf-8", errors="replace")

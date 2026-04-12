@@ -74,29 +74,29 @@ $ stegoforge ctf --file suspicious.mp3
 ```
 stegoforge/
 ├── Image Carriers          PNG · JPEG · BMP · GIF · WebP
-│   ├── LSB / Adaptive LSB  1–4 bit depth + content-aware ordering
-│   ├── DCT + JND-safe cap  JPEG frequency-domain embedding + safe budget
+│   ├── LSB / Adaptive LSB  1–4 bit depth + WOW-style content-aware cost ordering
+│   ├── DCT + JND-safe cap  JPEG frequency-domain embedding + Watson-style perceptual budget
 │   ├── Fingerprint LSB     PRNU-aware embedding mode
 │   └── Alpha / Palette     Transparency and indexed-color channels
 │
 ├── Video Carriers          MP4 · WebM
-│   ├── Video DCT           Keyframe-focused embedding
-│   └── Video Motion        P-frame style embedding (MP4)
+│   ├── Video DCT           Keyframe embedding with block-cost ranking
+│   └── Video Motion        Temporal+texture masked block embedding (MP4)
 │
 ├── Audio Carriers          WAV · FLAC · MP3 · OGG
-│   ├── Sample LSB          PCM least-significant bits
+│   ├── Sample LSB          Psychoacoustic-style cost-ordered PCM LSB
 │   ├── Phase coding        Segment-phase encoding
 │   └── Spectrogram art     Visual payloads in spectrum domain
 │
 ├── Document Carriers       TXT · PDF · DOCX · XLSX
-│   ├── Unicode whitespace  ZWSP/ZWNJ/ZWJ zero-width encoding
-│   ├── Linguistic mode     Synonym-channel text steganography
+│   ├── Unicode whitespace  Adaptive insertion-point ranking (ZWSP/ZWNJ/ZWJ)
+│   ├── Linguistic mode     Key-aware synonym-channel text steganography
 │   ├── PDF streams         Object/stream/metadata injection
 │   └── Office XML          Custom XML parts and streams
 │
 ├── Binary Carriers         ELF · PE/EXE/DLL (CLI)
-│   ├── ELF slack/notes     Section slack + note region embedding
-│   └── PE slack/overlay    Section slack + overlay embedding
+│   ├── ELF slack/notes     2-bit masked region-cost embedding
+│   └── PE slack/overlay    2-bit masked region-cost embedding
 │
 ├── Network Covert Channels (CLI)
 │   ├── TCP field channels  ip_id, tcp_seq, ttl
@@ -109,8 +109,8 @@ stegoforge/
 │   └── Platform profiles   Social-media-aware method selection/simulation
 │
 └── Interfaces
-  ├── CLI                 Encode/decode/detect/ctf/survive/deadrop
-  ├── Web UI (Flask)      Local drag-and-drop with SSE streaming
+  ├── CLI                 Hybrid-first grouped method selection + full command mode
+  ├── Web UI (Flask)      Grouped method pills, hybrid badges, local SSE streaming
   └── CTF mode            One command, all relevant detectors, ranked report
 ```
 
@@ -163,6 +163,7 @@ stegoforge
 The menu now includes a cinematic startup sequence with centered signature lines, a clearer "Ready to forge covert channels" status, and smoother transitions between sections (Encode, Decode, Detect, CTF, and more).
 
 The interactive flow still guides you step-by-step through encoding, decrypting payloads, running CTF forensics, or spinning up the Drag-and-Drop Web UI.
+Encode method selection is grouped by category with hybrid methods shown first for easier choosing.
 
 Want instant startup for automation or demos?
 
@@ -260,7 +261,7 @@ stegoforge ctf --batch ./suspicious_files/
 | Chi-square | Images | LSB frequency distribution anomalies |
 | RS Analysis | Images | Payload capacity estimation without key |
 | ML Steganalysis | Images | Learned stego likelihood from ONNX model |
-| Fingerprint | Images | PRNU inconsistency / tamper heatmap support |
+| Fingerprint | Images | PRNU inconsistency + in-browser tamper heatmap |
 | Video anomaly | MP4/WebM | Keyframe DCT-distribution anomalies |
 | Audio anomaly | WAV/FLAC/MP3/OGG | Sample bit-plane/statistical irregularities |
 | PDF anomaly | PDF | Suspicious PDF structures (/EmbeddedFile, JS, tail entropy) |
@@ -271,6 +272,7 @@ stegoforge ctf --batch ./suspicious_files/
 
 Detector routing is file-type-aware. Image-only detectors are skipped for non-image files,
 and audio/video/document/binary-specific analyzers are included where applicable.
+Fingerprint heatmaps are generated in-memory for web display (no root-folder artifact files).
 
 ---
 
@@ -310,27 +312,27 @@ stegoforge/
 ├── core/
 │   ├── image/
 │   │   ├── lsb.py          LSB encode/decode, configurable depth & channels
-│   │   ├── adaptive.py     Content-aware adaptive LSB
+│   │   ├── adaptive.py     WOW-style directional residual cost adaptive LSB
 │   │   ├── dct.py          DCT coefficient injection for JPEG
 │   │   ├── fingerprint.py  PRNU-aware embedding
 │   │   ├── alpha.py        Alpha channel covert channel
 │   │   └── palette.py      Indexed-color palette reordering
 │   ├── audio/
-│   │   ├── lsb.py          PCM sample bit manipulation
+│   │   ├── lsb.py          Cost-ordered PCM sample LSB embedding
 │   │   ├── phase.py        Phase coding across audio segments
 │   │   └── spectrogram.py  Spectrogram image embedding
 │   ├── video/
-│   │   ├── dct.py          Keyframe-focused video embedding
-│   │   └── motion.py       Motion-style video embedding
+│   │   ├── dct.py          Keyframe block-cost video embedding
+│   │   └── motion.py       Temporal+texture masked video embedding
 │   ├── binary/
-│   │   ├── elf.py          ELF carrier encoder
-│   │   └── pe.py           PE carrier encoder
+│   │   ├── elf.py          ELF masked slack/notes encoder
+│   │   └── pe.py           PE masked slack/overlay encoder
 │   ├── network/
 │   │   ├── tcp.py          TCP covert channel encoder
 │   │   └── timing.py       Timing covert channel encoder
 │   ├── document/
-│   │   ├── unicode.py      Zero-width character encoding
-│   │   ├── linguistic.py   Synonym-channel linguistic stego
+│   │   ├── unicode_ws.py   Adaptive zero-width character encoding
+│   │   ├── linguistic.py   Key-aware synonym-channel linguistic stego
 │   │   ├── pdf.py          PDF stream/object injection
 │   │   └── office.py       DOCX/XLSX XML stream manipulation
 │   └── crypto/
@@ -344,7 +346,7 @@ stegoforge/
 │   ├── exif.py             Metadata forensics scanner
 │   ├── blind.py            Brute-force extractor
 │   ├── ml_steganalysis.py  Hugging Face-backed ONNX detector
-│   ├── fingerprint.py      PRNU inconsistency detector
+│   ├── fingerprint.py      PRNU inconsistency detector (+ in-memory heatmap)
 │   ├── audio_anomaly.py    Audio-specific anomaly detector
 │   ├── pdf_anomaly.py      PDF-specific anomaly detector
 │   ├── document_anomaly.py Document-specific anomaly detector

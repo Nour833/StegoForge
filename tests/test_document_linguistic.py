@@ -31,3 +31,12 @@ def test_roundtrip():
 def test_capacity_positive():
     enc = LinguisticEncoder()
     assert enc.capacity(_cover_text()) > 0
+
+
+def test_roundtrip_with_key():
+    enc = LinguisticEncoder()
+    cover = _cover_text()
+    payload = b"linguistic keyed payload"
+    stego = enc.encode(cover, payload, key="ling-key")
+    out = enc.decode(stego, key="ling-key")
+    assert out == payload

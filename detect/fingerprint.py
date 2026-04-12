@@ -3,8 +3,8 @@ detect/fingerprint.py - PRNU inconsistency detector.
 """
 from __future__ import annotations
 
+import base64
 import io
-from pathlib import Path
 
 import numpy as np
 from PIL import Image
@@ -38,14 +38,14 @@ class FingerprintDetector(BaseDetector):
         confidence = float(min(1.0, anomalous_fraction * 12.0))
         detected = confidence >= 0.25
 
-        heatmap_path = None
+        heatmap_b64 = None
         if detected:
-            heatmap_path = self._write_heatmap(score_map, filename)
+            heatmap_b64 = self._heatmap_png_b64(score_map)
 
         details = {
             "anomalous_fraction": round(anomalous_fraction, 6),
             "threshold": round(threshold, 6),
-            "heatmap": heatmap_path,
+            "heatmap_b64": heatmap_b64,
             "interpretation": (
                 "Residual statistics contain spatial inconsistencies suggestive of tampering"
                 if detected
@@ -71,14 +71,13 @@ class FingerprintDetector(BaseDetector):
         local_std = np.sqrt(np.maximum(local_mu2 - local_mu * local_mu, 1e-6))
         return np.abs((mag - local_mu) / (local_std + 1e-6))
 
-    def _write_heatmap(self, score_map: np.ndarray, filename: str) -> str:
+    def _heatmap_png_b64(self, score_map: np.ndarray) -> str:
         scaled = np.clip(score_map / max(1e-6, np.percentile(score_map, 99)), 0.0, 1.0)
         rgb = np.zeros((scaled.shape[0], scaled.shape[1], 3), dtype=np.uint8)
         rgb[:, :, 0] = (scaled * 255).astype(np.uint8)
         rgb[:, :, 1] = (scaled * 180).astype(np.uint8)
         rgb[:, :, 2] = (scaled * 40).astype(np.uint8)
 
-        stem = Path(filename).stem if filename else "stegoforge"
-        path = Path.cwd() / f"{stem}_fingerprint_heatmap.png"
-        Image.fromarray(rgb, mode="RGB").save(path, format="PNG")
-        return str(path)
+        buf = io.BytesIO()
+        Image.fromarray(rgb, mode="RGB").save(buf, format="PNG")
+        return base64.b64encode(buf.getvalue()).decode("ascii")

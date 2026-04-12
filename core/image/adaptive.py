@@ -1,8 +1,8 @@
 """
 core/image/adaptive.py - Adaptive content-aware LSB steganography.
 
-This encoder ranks embedding locations by local variance and writes bits in the
-lowest-cost regions first (textured/high-entropy pixels), which reduces the
+This encoder uses a WOW-style directional residual cost map and writes bits in
+the lowest-cost regions first (textured/high-entropy pixels), which reduces the
 statistical footprint compared to uniform LSB embedding.
 """
 import hashlib
@@ -11,7 +11,7 @@ import struct
 
 import numpy as np
 from PIL import Image
-from scipy.ndimage import uniform_filter
+from scipy.ndimage import convolve, uniform_filter
 
 from core.base import BaseEncoder
 
@@ -95,13 +95,29 @@ class AdaptiveLSBEncoder(BaseEncoder):
         return _bits_to_bytes(bits[HEADER_SIZE * 8:total_bits])
 
     def _ordered_channel_indices(self, arr: np.ndarray, key: str | None) -> np.ndarray:
-        # Cost is inverse variance: textured regions (high variance) have lower cost.
         # Remove LSB impact so stego decode recomputes an identical ordering.
         gray = ((arr >> 1).mean(axis=2)).astype(np.float32)
+
+        # WOW-style directional high-pass residuals: smooth regions produce low
+        # residual energy (high embedding cost), textured regions produce higher
+        # residual energy (low embedding cost).
+        kernels = [
+            np.array([[-1.0, 2.0, -1.0], [2.0, -4.0, 2.0], [-1.0, 2.0, -1.0]], dtype=np.float32),
+            np.array([[-1.0, -1.0, -1.0], [2.0, 2.0, 2.0], [-1.0, -1.0, -1.0]], dtype=np.float32),
+            np.array([[-1.0, 2.0, -1.0], [-1.0, 2.0, -1.0], [-1.0, 2.0, -1.0]], dtype=np.float32),
+        ]
+
+        residual_energy = np.zeros_like(gray, dtype=np.float32)
+        for k in kernels:
+            r = convolve(gray, k, mode="reflect")
+            residual_energy += uniform_filter(np.abs(r), size=5, mode="reflect")
+
+        # Blend in local variance to stabilize costs on natural images.
         mean = uniform_filter(gray, size=5, mode="reflect")
         mean_sq = uniform_filter(gray * gray, size=5, mode="reflect")
         var = np.maximum(mean_sq - mean * mean, 0.0)
-        cost = 1.0 / (var + 1e-6)
+        texture = residual_energy + np.sqrt(var + 1e-6)
+        cost = 1.0 / (texture + 1e-4)
 
         cost_flat = np.repeat(cost.flatten(), 3)
         quantized = np.round(cost_flat, 4)

@@ -9,9 +9,11 @@ Embeds payload in the least-significant bits of PCM audio samples.
 Wire format: [4-byte big-endian length header][payload bytes]
 """
 import io
+import hashlib
 import struct
 import wave
 import numpy as np
+from scipy.ndimage import uniform_filter1d
 
 from core.audio._convert import decode_audio_to_wav
 from core.base import BaseEncoder
@@ -96,10 +98,12 @@ class AudioLSBEncoder(BaseEncoder):
 
         data = struct.pack(HEADER_FMT, len(payload_bytes)) + payload_bytes
         bits = _bytes_to_bits(data)
+        key = kwargs.get("key")
+        ordered = self._ordered_indices(samples, depth, key)
 
         mask = ~((1 << depth) - 1)
         bit_idx = 0
-        for i in range(len(samples)):
+        for i in ordered:
             if bit_idx >= len(bits):
                 break
             chunk = bits[bit_idx:bit_idx + depth]
@@ -112,10 +116,12 @@ class AudioLSBEncoder(BaseEncoder):
     def decode(self, stego_bytes: bytes, depth: int = 1, ext: str = ".wav", **kwargs) -> bytes:
         wav_bytes = decode_audio_to_wav(stego_bytes, ext)
         samples, _ = _wav_to_samples(wav_bytes)
+        key = kwargs.get("key")
+        ordered = self._ordered_indices(samples, depth, key)
 
         header_bit_count = HEADER_SIZE * 8
         bits = []
-        for i in range(len(samples)):
+        for i in ordered:
             if len(bits) >= header_bit_count:
                 break
             val = int(samples[i])
@@ -128,7 +134,7 @@ class AudioLSBEncoder(BaseEncoder):
 
         total_bits = (HEADER_SIZE + length) * 8
         bits = []
-        for i in range(len(samples)):
+        for i in ordered:
             if len(bits) >= total_bits:
                 break
             val = int(samples[i])
@@ -136,6 +142,30 @@ class AudioLSBEncoder(BaseEncoder):
                 bits.append((val >> bit_pos) & 1)
 
         return _bits_to_bytes(bits[header_bit_count:total_bits])
+
+    def _ordered_indices(self, samples: np.ndarray, depth: int, key: str | None) -> np.ndarray:
+        # Remove embedded LSB influence so encode/decode derive matching order.
+        base = ((samples >> depth) << depth).astype(np.float32)
+        amp = np.abs(base)
+        d = np.abs(np.diff(base, prepend=base[0]))
+
+        # Psychoacoustic approximation: higher local energy/transients mask changes better.
+        energy = uniform_filter1d(amp, size=1536, mode="nearest")
+        transients = uniform_filter1d(d, size=768, mode="nearest")
+        mask_strength = energy + 0.85 * transients
+
+        # Penalize near-silent zones where LSB edits are easier to detect.
+        silence_penalty = np.where(amp < 16.0, 4.0, 1.0)
+        cost = silence_penalty / (mask_strength + 1.0)
+
+        quantized = np.round(cost, 6)
+        if key:
+            seed = int.from_bytes(hashlib.sha256(key.encode("utf-8")).digest()[:8], "big")
+            rng = np.random.default_rng(seed)
+        else:
+            rng = np.random.default_rng(0)
+        tie = rng.random(len(samples), dtype=np.float32)
+        return np.lexsort((tie, quantized))
 
 
 def _bytes_to_bits(data: bytes) -> list[int]:

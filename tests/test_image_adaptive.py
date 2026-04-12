@@ -54,3 +54,10 @@ def test_adaptive_chi2_lower_than_uniform_lsb():
     adp_score = detector.analyze(adp_stego, "adaptive.png").confidence
 
     assert adp_score <= lsb_score
+
+
+def test_adaptive_module_mentions_wow_style_cost_map():
+    import core.image.adaptive as adaptive_mod
+
+    doc = adaptive_mod.__doc__ or ""
+    assert "WOW-style" in doc

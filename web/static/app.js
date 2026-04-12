@@ -171,16 +171,26 @@ toggleCollapse('platform-toggle', 'platform-content');
   const hidden = $('enc-method');
   const desc = $('method-desc');
   const pills = document.querySelectorAll('#enc-method-pills .method-pill');
+  const renderDescription = (pill) => {
+    const rating = pill.dataset.rating || '';
+    const text = pill.dataset.desc || '';
+    desc.textContent = `${text}${rating ? ` Forensic resistance: ${rating}.` : ''}`;
+  };
+
   pills.forEach((pill) => {
     pill.addEventListener('click', () => {
       pills.forEach((p) => p.classList.remove('selected'));
       pill.classList.add('selected');
       hidden.value = pill.dataset.method || '';
-      const rating = pill.dataset.rating || '';
-      const text = pill.dataset.desc || '';
-      desc.textContent = `${text}${rating ? ` Forensic resistance: ${rating}.` : ''}`;
+      renderDescription(pill);
     });
   });
+
+  const initial = document.querySelector('#enc-method-pills .method-pill.selected');
+  if (initial) {
+    hidden.value = initial.dataset.method || '';
+    renderDescription(initial);
+  }
 })();
 
 // Depth sliders
@@ -424,8 +434,10 @@ function renderDetectorResult(r) {
     extra += `<div class="result-grid"><div class="result-key">Analysis</div><div class="result-val">${details.interpretation}</div></div>`;
   }
 
-  if (r.method === 'fingerprint' && details.heatmap) {
-    const src = `/artifact?path=${encodeURIComponent(details.heatmap)}`;
+  if (r.method === 'fingerprint' && (details.heatmap_b64 || details.heatmap)) {
+    const src = details.heatmap_b64
+      ? `data:image/png;base64,${details.heatmap_b64}`
+      : `/artifact?path=${encodeURIComponent(details.heatmap)}`;
     extra += `<div style="margin-top:10px"><img src="${src}" alt="Fingerprint heatmap" style="max-width:100%;border-radius:8px;border:1px solid var(--border-subtle)"><div style="font-size:.78rem;color:var(--text-muted);margin-top:6px">Brighter regions indicate anomalous residual noise statistics consistent with pixel modification.</div></div>`;
   }
 

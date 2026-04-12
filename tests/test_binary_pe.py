@@ -45,3 +45,24 @@ def test_capacity_positive():
     enc = PEEncoder()
     cap = enc.capacity(_fake_pe())
     assert cap > 0
+
+
+def test_roundtrip_with_key():
+    enc = PEEncoder()
+    carrier = _fake_pe()
+    payload = b"PE payload with key"
+    stego = enc.encode(carrier, payload, key="pe-key")
+    out = enc.decode(stego, key="pe-key")
+    assert out == payload
+
+
+def test_wrong_key_fails():
+    enc = PEEncoder()
+    carrier = _fake_pe()
+    payload = b"PE key mismatch"
+    stego = enc.encode(carrier, payload, key="right-key")
+    try:
+        _ = enc.decode(stego, key="wrong-key")
+    except ValueError:
+        return
+    raise AssertionError("Decoding with wrong key unexpectedly succeeded")

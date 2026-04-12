@@ -56,3 +56,24 @@ def test_capacity_positive():
     enc = ELFEncoder()
     cap = enc.capacity(_fake_elf())
     assert cap > 0
+
+
+def test_roundtrip_with_key():
+    enc = ELFEncoder()
+    carrier = _fake_elf()
+    payload = b"ELF payload with key"
+    stego = enc.encode(carrier, payload, key="elf-key")
+    out = enc.decode(stego, key="elf-key")
+    assert out == payload
+
+
+def test_wrong_key_fails():
+    enc = ELFEncoder()
+    carrier = _fake_elf()
+    payload = b"ELF key mismatch"
+    stego = enc.encode(carrier, payload, key="right-key")
+    try:
+        _ = enc.decode(stego, key="wrong-key")
+    except ValueError:
+        return
+    raise AssertionError("Decoding with wrong key unexpectedly succeeded")

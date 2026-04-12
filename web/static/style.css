@@ -288,6 +288,28 @@ body {
   gap: 8px;
 }
 
+.method-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.method-group {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.02);
+  padding: 10px 10px 12px;
+}
+
+.method-group-title {
+  font-size: 0.74rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent-cyan);
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
 .method-pill {
   font-family: 'JetBrains Mono', monospace;
   font-size: 0.75rem;
@@ -310,6 +332,16 @@ body {
   color: var(--accent-cyan);
   border-color: rgba(0, 212, 255, 0.45);
   background: rgba(0, 212, 255, 0.12);
+}
+
+.method-pill-badge {
+  font-size: 0.64rem;
+  letter-spacing: 0.08em;
+  border: 1px solid rgba(255, 215, 64, 0.45);
+  color: var(--accent-yellow);
+  border-radius: 999px;
+  padding: 1px 5px;
+  margin-left: 6px;
 }
 
 .platform-pills {
