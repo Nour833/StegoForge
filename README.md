@@ -1,26 +1,34 @@
 
 <div align="center">
+  <img src="interface.gif" alt="StegoForge Dashboard" width="850">
 
-![StegoForge CLI Sequence](interface.gif)
+  # 🛡️ StegoForge
+  **The ultimate hybrid of steganography, digital forensics, and covert communications.**
 
-
----
-
-![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)
-![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
-![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey?style=flat-square)
-![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
-![CTF](https://img.shields.io/badge/CTF-Ready-red?style=flat-square)
-
+  [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
+  [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
+  [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey?style=for-the-badge)](https://github.com/Nour833/StegoForge/releases)
+  [![CTF](https://img.shields.io/badge/CTF-Ready-red?style=for-the-badge)]()
 </div>
 
 ---
 
-## What is StegoForge?
+## ⚡ Quick Launch (Standalone Binaries)
 
-StegoForge is a **modular, extensible steganography toolkit** that covers the full spectrum — from embedding payloads into images, audio, video, documents, binaries, and controlled network channels, to detecting and extracting hidden data from suspicious files. Built for security researchers, CTF players, and digital forensics practitioners.
+StegoForge is a complex Python framework, but you shouldn't have to deal with broken environments when doing active forensics. We have compiled **zero-dependency, native executables** that automatically resolve their own AI and Media requirements.
 
-It does not try to be one thing. It tries to be everything stego-related, done properly.
+Head over to the **[Releases Page](https://github.com/Nour833/StegoForge/releases)** and download the binary for your OS.
+* No `pip install` required.
+* No `PATH` configurations.
+* **Just execute it.**
+
+---
+
+## 🧠 What is StegoForge?
+
+StegoForge is a **modular, enterprise-grade steganography toolkit** engineered for the full lifecycle of covert data: from embedding payloads into images, audio, video, and active network protocols, to deploying machine-learning steganalysis to forcibly extract anomalies from suspicious carrier files. 
+
+Built for security researchers, CTF players, and digital forensics practitioners, it doesn't try to be one thing. It executes the entire forensic spectrum seamlessly.
 
 ```
 $ stegoforge encode --carrier cover.png --payload secret.txt --key "mypassword" --method lsb
@@ -86,43 +94,28 @@ stegoforge/
 
 ---
 
-## Installation
+## 💻 Developer Installation
+
+If you wish to build StegoForge from source or utilize the Python APIs natively:
 
 ```bash
-git clone https://github.com/youruser/stegoforge
-cd stegoforge
+git clone https://github.com/Nour833/StegoForge.git
+cd StegoForge
 pip install -r requirements.txt
 pip install -r requirements-web.txt
 pip install -e .
 ```
 
-Then run:
+Fire up the Glassmorphism Web App instantly:
 ```bash
-stegoforge web  # opens at http://localhost:5000
+stegoforge web  # Automatically deploys at http://localhost:5000
 ```
 
-**Requirements:** Python 3.10+, pip. No root needed.
-
-**Runtime dependencies for all features:**
-```bash
-# System ffmpeg is recommended for video/audio performance.
-sudo apt install ffmpeg
-```
-
-If system ffmpeg is unavailable, StegoForge can use the bundled fallback from
-`imageio-ffmpeg` (installed via `requirements.txt`).
-
-For real ML steganalysis, `onnxruntime` and `huggingface_hub` are required
-(already included in `requirements.txt`).
-
-ML steganalysis uses a real ONNX model fetched from Hugging Face on first run
-and cached in `models/srnet_lite.onnx`.
-You can override source with:
-`STEGOFORGE_ML_HF_REPO`, `STEGOFORGE_ML_HF_FILE`, and optional `HF_TOKEN`.
+> **Note on ML Architecture**: StegoForge implements true Machine Learning steganalysis. The very first time you boot the engine, it will silently interface with HuggingFace to download the ONNX CNN weights directly into your `~/.stegoforge/models` cache.
 
 ---
 
-## Interactive Menu (Recommended for Beginners!) 🎨
+## 🎨 Interactive Menu (Recommended for Beginners)
 
 Don't want to memorize terminal commands? Just run the tool on its own to access the interactive CLI!
 
@@ -130,270 +123,130 @@ Don't want to memorize terminal commands? Just run the tool on its own to access
 stegoforge
 ```
 
-The menu now includes a cinematic startup sequence with centered signature lines, a clearer "Ready to forge covert channels" status, and smoother transitions between sections (Encode, Decode, Detect, CTF, and more).
+> The menu features a cinematic startup sequence, grouped method selection, and guided transitions between Encoding, Decoding, and Forensics.
 
-The interactive flow still guides you step-by-step through encoding, decrypting payloads, running CTF forensics, or spinning up the Drag-and-Drop Web UI.
-Encode method selection is grouped by category with hybrid methods shown first for easier choosing.
-
-Want instant startup for automation or demos?
-
-```bash
-STEGOFORGE_FAST_UI=1 stegoforge
-```
-
-Want to tune animation pacing instead of disabling it fully?
-
-```bash
-STEGOFORGE_UI_STAGE_DELAY=0.45 STEGOFORGE_UI_TRANSITION_DELAY=0.55 stegoforge
-```
-
+**Pro-Tips for Automation:**
+- `STEGOFORGE_FAST_UI=1 stegoforge` skips animations for rapid, zero-delay bootups.
+- `STEGOFORGE_UI_STAGE_DELAY=0.45 stegoforge` fine-tunes the pacing of the visual display.
 
 ---
 
-## Command Line Usage
+## 💻 Advanced Command Line Interface
 
-### Encode a payload
+If you prefer raw terminal throughput, the CLI supports hyper-specific routing for all modules.
 
+### 🥷 1. Payload Encoding
 ```bash
 # Basic LSB into PNG
 stegoforge encode -c photo.png -p message.txt -k "passphrase"
 
-# JPEG DCT with custom bit depth
+# Stealth JPEG DCT with custom bit depth
 stegoforge encode -c photo.jpg -p secret.bin -k "key" --method dct
 
-# Spectrogram art — hide an image inside audio
+# Spectrogram Art — Hide a visual image inside playable audio
 stegoforge encode -c music.wav -p logo.png --method spectrogram
 
-# Office document covert channel
-stegoforge encode -c report.docx -p payload.txt -k "key" --method docx
-
-# Decoy mode — two keys, two payloads
+# Decoy mode — Generates two keys, hiding two payloads in one file for plausible deniability
 stegoforge encode -c photo.png -p real_secret.txt -k "realkey" \
                   --decoy decoy_message.txt --decoy-key "duresskey"
 ```
 
-### Decode a payload
-
+### 🔓 2. Payload Decoding
 ```bash
 stegoforge decode -f photo_stego.png -k "passphrase"
 stegoforge decode -f music_stego.wav -k "key" --method phase
 ```
 
-### Detection & forensics
-
+### 🕵️ 3. Blind Forensics & CTF Mode (Zero-Knowledge)
 ```bash
-# Run everything at once (CTF mode — recommended)
+# Run the complete heuristic gauntlet natively (Highly Recommended)
 stegoforge ctf -f suspicious.png
-stegoforge ctf -f secret_audio.mp3  # Audio blind-extraction fully supported
 
-# Individual detectors
+# Targeted ML / Statistical Detection
 stegoforge detect --chi2 -f image.png
 stegoforge detect --rs -f image.png
-stegoforge detect --exif -f document.pdf
-stegoforge detect --blind -f unknown.wav   # tries all depth patterns & LSB/Phase
-
-# JSON output for scripting
-stegoforge ctf -f image.png --json > report.json
-
-# Platform survivability simulation
-stegoforge survive -c photo.png -p secret.txt -k "key" --target instagram
-
-# Dead drop protocol
-stegoforge deadrop post -c cover.png -p msg.txt -k "shared"
-stegoforge deadrop check --url https://example.com/drop.png -k "shared"
-stegoforge deadrop monitor --url https://example.com/drop.png -k "shared" --interval 20
-
-# Key exchange over stego carriers
-stegoforge deadrop keyx initiate -c cover.png -o keyx_init.png --local-passphrase "local-pass"
-stegoforge deadrop keyx complete -f keyx_init.png --local-passphrase "local-pass" --output-key-file session.key
-
-# Extended survivability targets
-stegoforge survive -c photo.png -p secret.txt -k "key" --target facebook
-stegoforge survive -c photo.png -p secret.txt -k "key" --target signal
 ```
 
-### Batch mode
-
+### 🛰️ 4. Covert Protocols (Dead Drops)
 ```bash
-# Encode into all PNGs in a directory
-stegoforge encode --batch ./covers/ -p secret.txt -k "key"
+# Embed a payload and securely POST it as a disguised HTTP packet
+stegoforge deadrop post -c cover.png -p msg.txt -k "shared_key"
 
-# Scan a whole directory for hidden data
-stegoforge ctf --batch ./suspicious_files/
+# Monitor a remote image URL for an incoming payload change
+stegoforge deadrop monitor --url "https://example.com/image.png" -k "shared_key" --interval 20
 ```
 
 ---
 
-## Detection Methods Explained
+## 🔬 Detection Methods Overview
 
-| Method | Target | What It Finds |
+<details>
+<summary><b>Click to expand full list of Forensic Capabilities</b></summary>
+
+| Method | Target File | What It Automatically Detects |
 |---|---|---|
-| Chi-square | Images | LSB frequency distribution anomalies |
-| RS Analysis | Images | Payload capacity estimation without key |
-| ML Steganalysis | Images | Learned stego likelihood from ONNX model |
-| Fingerprint | Images | PRNU inconsistency + in-browser tamper heatmap |
-| Video anomaly | MP4/WebM | Keyframe DCT-distribution anomalies |
-| Audio anomaly | WAV/FLAC/MP3/OGG | Sample bit-plane/statistical irregularities |
-| PDF anomaly | PDF | Suspicious PDF structures (/EmbeddedFile, JS, tail entropy) |
-| Document anomaly | TXT/DOCX/XLSX | Invisible-char / Office container anomalies |
-| Binary anomaly | ELF/PE | Section-slack/entropy anomalies |
-| EXIF scanner | All | Metadata, hidden thumbnails, XMP, comments |
-| Blind extractor | Images/Audio/Video-audio track | Auto-tries common patterns and AES-magic payloads |
+| **Chi-square** | Images | LSB frequency distribution anomalies |
+| **RS Analysis** | Images | Payload capacity estimation without a key |
+| **ML Steganalysis** | Images | Learned stego likelihood from HuggingFace ONNX CNN models |
+| **Fingerprint** | Images | PRNU inconsistency + in-browser tamper heatmaps |
+| **Video anomaly** | MP4/WebM | Keyframe DCT-distribution anomalies |
+| **Audio anomaly** | WAV/FLAC/MP3 | Sample bit-plane and statistical irregularities |
+| **PDF anomaly** | PDF | Suspicious `/EmbeddedFile`, JS, or tail entropy |
+| **Blind extractor** | Multimedia | Auto-tries common bit-patterns and AES-magic headers |
 
-Detector routing is file-type-aware. Image-only detectors are skipped for non-image files,
-and audio/video/document/binary-specific analyzers are included where applicable.
-Fingerprint heatmaps are generated in-memory for web display (no root-folder artifact files).
+</details>
 
 ---
 
-## CTF Mode Output Example
+## 📂 System Architecture
 
-```
-$ stegoforge ctf --file chall.png
+<details>
+<summary><b>Click to explore StegoForge's Module Tree</b></summary>
 
-╔══════════════════════════════════════════════╗
-║           StegoForge — CTF Report            ║
-╠══════════════════════════════════════════════╣
-║  File      : chall.png (1024×768, RGB PNG)   ║
-║  Size      : 2.3 MB                          ║
-╠══════════════════════════════════════════════╣
-║  [!!] Chi-square anomaly        HIGH  94.3%  ║
-║  [!!] RS estimated capacity     ~22%  pixels ║
-║  [ ] DCT coefficient check      CLEAN        ║
-║  [ ] Alpha channel              NOT PRESENT  ║
-║  [!] EXIF comment field         NON-EMPTY    ║
-╠══════════════════════════════════════════════╣
-║  Blind extractor results:                    ║
-║  → RGB-R, LSB-1bit, no enc → 512 bytes [!!]  ║
-║  → RGB-B, LSB-2bit, AES    → encrypted blob  ║
-╠══════════════════════════════════════════════╣
-║  Saved: extracted_R_1bit.bin                 ║
-╚══════════════════════════════════════════════╝
-
-Note: Audio files parsed via CTF mode gracefully skip image-only forensic tooling (e.g., Chi-Square & RS Analysis are labeled `SKIPPED`) to avoid false `CLEAN` results, while seamlessly parsing PCM bitstreams directly into the upgraded audio-compatible Blind Extractor.
-```
-
----
-
-## Architecture
-
-```
+```text
 stegoforge/
 ├── core/
-│   ├── image/
-│   │   ├── lsb.py          LSB encode/decode, configurable depth & channels
-│   │   ├── adaptive.py     WOW-style directional residual cost adaptive LSB
-│   │   ├── dct.py          DCT coefficient injection for JPEG
-│   │   ├── fingerprint.py  PRNU-aware embedding
-│   │   ├── alpha.py        Alpha channel covert channel
-│   │   └── palette.py      Indexed-color palette reordering
-│   ├── audio/
-│   │   ├── lsb.py          Cost-ordered PCM sample LSB embedding
-│   │   ├── phase.py        Phase coding across audio segments
-│   │   └── spectrogram.py  Spectrogram image embedding
-│   ├── video/
-│   │   ├── dct.py          Keyframe block-cost video embedding
-│   │   └── motion.py       Temporal+texture masked video embedding
-│   ├── binary/
-│   │   ├── elf.py          ELF masked slack/notes encoder
-│   │   └── pe.py           PE masked slack/overlay encoder
-│   ├── network/
-│   │   ├── tcp.py          TCP covert channel encoder
-│   │   └── timing.py       Timing covert channel encoder
-│   ├── document/
-│   │   ├── unicode_ws.py   Adaptive zero-width character encoding
-│   │   ├── linguistic.py   Key-aware synonym-channel linguistic stego
-│   │   ├── pdf.py          PDF stream/object injection
-│   │   └── office.py       DOCX/XLSX XML stream manipulation
-│   └── crypto/
-│       ├── aes.py          AES-256-GCM encrypt/decrypt
-│       ├── kdf.py          Argon2 key derivation
-│       ├── decoy.py        Dual-payload deniability system
-│       └── polymorphic.py  Key-seeded encoding pattern variation
-├── detect/
-│   ├── chi2.py             Chi-square LSB attack
-│   ├── rs.py               Regular-Singular analysis
-│   ├── exif.py             Metadata forensics scanner
-│   ├── blind.py            Brute-force extractor
-│   ├── ml_steganalysis.py  Hugging Face-backed ONNX detector
-│   ├── fingerprint.py      PRNU inconsistency detector (+ in-memory heatmap)
-│   ├── audio_anomaly.py    Audio-specific anomaly detector
-│   ├── pdf_anomaly.py      PDF-specific anomaly detector
-│   ├── document_anomaly.py Document-specific anomaly detector
-│   ├── video_anomaly.py    Video keyframe anomaly detector
-│   ├── binary.py           ELF/PE anomaly detector
-│   └── survival.py         Platform profile + survivability simulation
-├── protocol/
-│   ├── deadrop.py          Dead-drop fetch/post/monitor helpers
-│   └── keyexchange.py      X25519 stego key exchange helpers
-├── stegoforge.py           Typer-based CLI entrypoint
-├── web/
-│   ├── app.py              Flask local web UI
-│   └── templates/
-└── tests/
+│   ├── image/          # LSB, Adaptive WOW, DCT, PRNU Fingerprinting, Palette
+│   ├── audio/          # PCM LSB, Phase-Coding, Spectrogram visual embedding
+│   ├── video/          # Keyframe block-cost, motion temporal masks
+│   ├── document/       # PDF Streams, Office XML, Unicode Zero-Width
+│   ├── network/        # Timing channels, TCP field covert channels
+│   ├── crypto/         # AES-256-GCM, Decoy Deniability, Argon2 KDF
+│   └── binary/         # ELF / PE Slack space embedding
+├── detect/             # Statistical analysis, HuggingFace ONNX CNNs, Brute-forcing
+├── protocol/           # HTTP Dead Drops, X25519 Stego Key Exchange
+└── web/                # High-performance Flask dashboard & Server-Sent Events
 ```
+</details>
 
 ---
 
-## Supported Formats
+## 🚀 Supported Capabilities Matrix
 
-| Format | Encode | Decode | Detect |
-|---|---|---|---|
-| PNG | ✅ LSB, Alpha, Palette | ✅ | ✅ |
-| JPEG | ✅ DCT | ✅ | ✅ |
-| BMP | ✅ LSB | ✅ | ✅ |
-| GIF | ✅ Palette | ✅ | ✅ |
-| WebP | ✅ Alpha | ✅ | ✅ |
-| MP4 | ✅ Video DCT, Video Motion | ✅ | ✅ |
-| WebM | ✅ Video DCT | ✅ | ✅ |
-| WAV | ✅ LSB, Phase, Spectrogram | ✅ | ✅ |
-| FLAC | ✅ LSB, Phase | ✅ | ✅ |
-| MP3 | ✅ LSB, Phase, Spectrogram | ✅ | ✅ |
-| OGG | ✅ LSB, Phase, Spectrogram | ✅ | ✅ |
-| PDF | ✅ Stream injection | ✅ | ✅ |
-| DOCX | ✅ XML streams | ✅ | ✅ |
-| XLSX | ✅ XML streams | ✅ | ✅ |
-| TXT | ✅ Unicode whitespace | ✅ | ✅ |
-| ELF | ✅ CLI only | ✅ | ✅ |
-| PE/EXE | ✅ CLI only | ✅ | ✅ |
+| Carrier Format | Injection Method | Extraction Status | Forensic Blind Detection |
+|:---:|:---:|:---:|:---:|
+| **PNG** | ✅ LSB, Alpha, Palette | ✅ Supported | ✅ Supported |
+| **JPEG** | ✅ DCT | ✅ Supported | ✅ Supported |
+| **MP4** | ✅ Video DCT, Motion | ✅ Supported | ✅ Supported |
+| **WAV / MP3** | ✅ Sample, Phase, Spectro | ✅ Supported | ✅ Supported |
+| **PDF** | ✅ Object/Stream | ✅ Supported | ✅ Supported |
+| **Office XML** | ✅ XML Streams | ✅ Supported | ✅ Supported |
+| **ELF / PE** | ✅ Slack Space / Header | ✅ Supported | ✅ Supported |
 
-Social survivability targets: twitter/x, instagram, telegram, discord, whatsapp, facebook, tiktok, linkedin, reddit, signal.
+Social survivability targets currently supported via Reed-Solomon wrapping: `twitter`, `instagram`, `telegram`, `discord`, `whatsapp`, `signal`.
 
 ---
 
-## Contributing
+## ⚖️ Legal Disclaimer & Contributing
 
-Pull requests are welcome. For major changes, open an issue first.
+> **Strictly Educational Disclaimer:**
+> StegoForge was engineered strictly for digital forensics research, Capture The Flag (CTF) competitions, and lawful offensive security testing. 
+> Concealing illegal content, orchestrating unauthorized data exfiltration, or attempting to evade lawful surveillance is universally illegal. The author accepts zero liability for any misuse of this technology.
 
-- Follow the existing module structure — each carrier type lives in its own file
-- All new methods must implement the `BaseEncoder` interface (`encode`, `decode`, `capacity`)
-- Add tests under `tests/` for any new carrier or detection method
-- Detection methods must also implement a confidence score (0.0–1.0)
-
----
-
-## Disclaimer
-
-> StegoForge is developed for **educational purposes**, **CTF competitions**, **digital forensics research**, and **legitimate security testing** only.
->
-> Steganography itself is a neutral technology. Its use to conceal illegal content, exfiltrate data without authorization, or evade lawful monitoring is **illegal in most jurisdictions** and is entirely the responsibility of the person doing it.
->
-> The author of this tool accepts no liability for any illegal, unethical, or harmful use. By using StegoForge, you agree that you are solely responsible for how you use it and that you will comply with all applicable laws in your jurisdiction.
->
-> This tool does not exploit any vulnerability or cause any damage to systems. It operates entirely on files you own or have authorization to process.
-
----
-
-## License
-
-MIT License — see [LICENSE](LICENSE) for details.
-
----
+**Contributing:**
+Pull requests are heavily welcomed. Please ensure new encoding methods implement the `BaseEncoder` interface and contain robust PyTest coverage.
 
 <div align="center">
-
-Made by nour833 for the community. Use it responsibly.
-
-**[Report a Bug](../../issues)** · **[Request a Feature](../../issues)** · **[CTF Writeups using StegoForge](../../discussions)**
-
+  <b>Built by Nour833. Coded for the community.</b><br>
+  <a href="../../issues">Report a Bug</a> • <a href="../../issues">Request a Feature</a>
 </div>
