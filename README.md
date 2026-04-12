@@ -1,38 +1,8 @@
 
 <div align="center">
 
-```text
-███████╗████████╗███████╗ ██████╗  ██████╗ ███████╗ ██████╗ ██████╗  ██████╗ ███████╗
-██╔════╝╚══██╔══╝██╔════╝██╔════╝ ██╔═══██╗██╔════╝██╔═══██╗██╔══██╗██╔════╝ ██╔════╝
-███████╗   ██║   █████╗  ██║  ███╗██║   ██║█████╗  ██║   ██║██████╔╝██║  ███╗█████╗  
-╚════██║   ██║   ██╔══╝  ██║   ██║██║   ██║██╔══╝  ██║   ██║██╔══██╗██║   ██║██╔══╝  
-███████║   ██║   ███████╗╚██████╔╝╚██████╔╝██║     ╚██████╔╝██║  ██║╚██████╔╝███████╗
-╚══════╝   ╚═╝   ╚══════╝ ╚═════╝  ╚═════╝ ╚═╝      ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚══════╝
+![StegoForge CLI Sequence](interface.gif)
 
-  ❯ Detect What Others Hide  ·  Survive Forensics
-  Hide in Images  ·  Hide in Audio  ·  Hide in Documents  ·  Hide in Video
-
-  🚀 v1.0.0  ·  🛡️ 20 encoding methods  ·  🔍 11 detection engines  ·  🔐 AES-256-GCM
-
-  Made by nour833
-
-╭────────┬────────────────┬───────────────────────────────────────────────╮
-│  1     │  Encode        │  Embed a secret payload in any carrier        │
-│  2     │  Decode        │  Extract & decrypt a hidden payload           │
-│  3     │  Detect        │  Analyze a file for hidden content            │
-│  4     │  CTF Mode      │  Run all detectors, get full forensic report  │
-│  5     │  Capacity      │  Check how much data a carrier can hold       │
-│  6     │  Web UI        │  Launch the local web interface               │
-│  7     │  Survival      │  Platform survivability simulation            │
-│  8     │  Dead Drop     │  Post/check/monitor covert channel            │
-│  q     │  Quit          │  Exit StegoForge                              │
-╰────────┴────────────────┴───────────────────────────────────────────────╯
-```
-
-**The most complete open-source steganography toolkit.**  
-Hide in images. Hide in audio. Hide in documents. Detect what others hide. Survive forensics.
-
-Made by nour833.
 
 ---
 

@@ -63,12 +63,12 @@ BANNER = r"""
 """
 
 TAGLINES = [
-    "Hide in Images  ·  Hide in Audio  ·  Hide in Documents  ·  Hide in Video",
-    "AES-256-GCM  ·  Argon2id  ·  Polymorphic Embedding",
-    "Chi-Square  ·  RS  ·  EXIF  ·  Blind  ·  ML  ·  Fingerprint  ·  Binary",
-    "CTF-Ready  ·  Pipe-Friendly  ·  JSON Output  ·  Zero Compromise",
+    "Advanced Heuristics  ·  Argon2id Key Derivation  ·  Polymorphic LSB",
+    "Zero-Day Survivability  ·  Wet-Paper Error Correction  ·  Audio Phase Codes",
+    "Forensic Invisibility  ·  Network Covert Channels  ·  Denial Mechanics",
+    "Secure Dead Drops  ·  Curve25519 Key Exchange  ·  AES-256-GCM",
 ]
-PRIMARY_TAGLINE = "Detect What Others Hide  ·  Survive Forensics"
+PRIMARY_TAGLINE = "Infiltrate Digital Carriers  ·  Evade Cryptanalysis"
 
 UI_ANIMATION_ENABLED = os.getenv("STEGOFORGE_FAST_UI", "0") not in ("1", "true", "TRUE", "yes", "YES")
 
@@ -100,27 +100,26 @@ def _startup_loading_sequence():
         return
 
     stages = [
-        "Loading encoder registry",
-        "Priming detector engines",
-        "Checking protocol modules",
-        "Preparing interactive workspace",
+        ("VFS", "Mounting virtual encoding registry...", "cyan"),
+        ("SEC", "Bypassing entropy constraints...", "magenta"),
+        ("ML",  "Loading ONNX steganalysis models...", "blue"),
+        ("CRY", "Priming cryptographic keyspace...", "green"),
     ]
 
-    with Progress(
-        SpinnerColumn(style="bright_cyan"),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(bar_width=26, complete_style="bright_cyan"),
-        console=console,
-        transient=True,
-    ) as progress:
-        task = progress.add_task("Booting StegoForge", total=len(stages))
-        for stage in stages:
-            progress.update(task, description=stage)
-            _ui_sleep(UI_STAGE_DELAY)
-            progress.advance(task)
-
-    console.print(Align.center(f"[{C_SUCCESS}]Ready to forge covert channels.[/{C_SUCCESS}]"))
+    console.clear()
     console.print()
+
+    for prefix, msg, color in stages:
+        console.print(f"  [{color}][{prefix}][/{color}] {msg}", end="")
+        sys.stdout.flush()
+        _ui_sleep(UI_STAGE_DELAY * 0.8)
+        console.print(f" [{C_SUCCESS}]OK[/{C_SUCCESS}]")
+        _ui_sleep(UI_STAGE_DELAY * 0.2)
+
+    console.print()
+    console.print(Align.center(f"[{C_SUCCESS}]System Sequence Initialized. Directives unlocked.[/{C_SUCCESS}]"))
+    console.print()
+    _ui_sleep(0.5)
 
 
 def _menu_transition(action: str):
@@ -133,33 +132,60 @@ def _menu_transition(action: str):
 
 def print_banner():
     """Print the animated StegoForge banner."""
-    # Gradient banner colors cycling
-    banner_text = Text(BANNER)
-    banner_text.stylize("bold bright_cyan", 0, len(BANNER) // 3)
-    banner_text.stylize("bold cyan", len(BANNER) // 3, 2 * len(BANNER) // 3)
-    banner_text.stylize("bold blue", 2 * len(BANNER) // 3)
-
-    console.print(banner_text)
-
-    # Always show the primary signature line in full.
-    console.print(
-        Align.center(
-            f"[dim cyan]❯[/dim cyan] [italic bright_white]{PRIMARY_TAGLINE}[/italic bright_white]"
-        )
-    )
+    banner_text = Text()
+    lines = BANNER.strip('\n').split('\n')
+    colors = ["#00ffff", "#00dfff", "#00bfff", "#009fff", "#007fff", "#005fff"]
+    
     if UI_ANIMATION_ENABLED and sys.stdout.isatty():
-        _ui_sleep(0.18)
+        from rich.live import Live
+        with Live(Align.center(banner_text), console=console, refresh_per_second=25, transient=False) as live:
+            for i, line in enumerate(lines):
+                color = colors[i % len(colors)]
+                banner_text.append(line + "\n", style=f"bold {color}")
+                live.update(Align.center(banner_text))
+                time.sleep(0.08)
+    else:
+        for i, line in enumerate(lines):
+            color = colors[i % len(colors)]
+            banner_text.append(line + "\n", style=f"bold {color}")
+        console.print(Align.center(banner_text))
+
+    if UI_ANIMATION_ENABLED and sys.stdout.isatty():
+        _ui_sleep(0.3)
+        # Cinematic typing effect
+        padding_width = max(0, (console.width - len(PRIMARY_TAGLINE)) // 2)
+        sys.stdout.write(" " * padding_width)
+        for char in PRIMARY_TAGLINE:
+            sys.stdout.write(char)
+            sys.stdout.flush()
+            time.sleep(0.015)
+        print("\n")
+        
         highlight = TAGLINES[int(time.time()) % len(TAGLINES)]
         console.print(Align.center(f"[dim]{highlight}[/dim]"))
+        _ui_sleep(0.3)
+    else:
+        console.print(Align.center(f"[bold white]{PRIMARY_TAGLINE}[/bold white]"))
+    
     console.print()
 
-    # Version + stats bar
+    # Dashboard-style stats panel
     info_text = (
-        f"[{C_DIM}]v1.0.0  ·  20 encoding methods  ·  "
-        f"11 detection engines  ·  AES-256-GCM  ·  CTF-Ready[/{C_DIM}]"
+        f"[dim white]Framework Version: 1.0.0-CORE  ·  Payload Modules: 20  ·  "
+        f"Forensic Engines: 11[/dim white]\n"
+        f"[bold cyan]Encryption: AES-256-GCM[/bold cyan]  ·  "
+        f"[bold magenta]Mode: STEALTH[/bold magenta]"
     )
-    console.print(Align.center(info_text))
-    console.print(Align.center(f"[{C_GOLD}]Made by nour833[/{C_GOLD}]"))
+    
+    panel = Panel(
+        Align.center(info_text),
+        border_style="bright_blue",
+        padding=(1, 4),
+        title=f"[bold bright_white]StegoForge[/bold bright_white]",
+        subtitle=f"[{C_GOLD}]Made by nour833[/{C_GOLD}]"
+    )
+    console.print(Align.center(panel))
+    _ui_sleep(0.3)
     console.print()
 
 
@@ -1390,8 +1416,8 @@ def interactive_survive():
 
 def interactive_menu():
     """Main interactive menu."""
-    print_banner()
     _startup_loading_sequence()
+    print_banner()
 
     menu_items = [
         ("[bold cyan]1[/bold cyan]", "Encode",    "Embed a secret payload in any carrier"),
@@ -1410,10 +1436,17 @@ def interactive_menu():
     table.add_column("Action", style="bold white", width=12)
     table.add_column("Description", style="dim")
 
-    for key, action, desc in menu_items:
-        table.add_row(key, action, desc)
-
-    console.print(table)
+    if UI_ANIMATION_ENABLED and sys.stdout.isatty():
+        with Live(table, console=console, refresh_per_second=20, transient=False) as live:
+            time.sleep(0.1)
+            for key, action, desc in menu_items:
+                table.add_row(key, action, desc)
+                live.update(table)
+                time.sleep(0.04)
+    else:
+        for key, action, desc in menu_items:
+            table.add_row(key, action, desc)
+        console.print(table)
 
     while True:
         choice = Prompt.ask(f"\n  [{C_TITLE}]Command[/{C_TITLE}]").strip().lower()
