@@ -326,7 +326,7 @@ stegoforge/
 ├── protocol/
 │   ├── deadrop.py          Dead-drop fetch/post/monitor helpers
 │   └── keyexchange.py      X25519 stego key exchange helpers
-├── cli.py                  Typer-based CLI entrypoint
+├── stegoforge.py           Typer-based CLI entrypoint
 ├── web/
 │   ├── app.py              Flask local web UI
 │   └── templates/

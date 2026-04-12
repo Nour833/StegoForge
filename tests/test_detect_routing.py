@@ -4,7 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from cli import op_detect
+from stegoforge import op_detect
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

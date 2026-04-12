@@ -74,7 +74,7 @@ def _encode_operation(form, files) -> tuple[dict, bytes, str]:
     if not key:
         raise ValueError("Encryption key is required")
 
-    from cli import op_encode
+    from stegoforge import op_encode
     from core.audio._convert import has_ffmpeg
 
     carrier_name = carrier_file.filename or "carrier.bin"
@@ -132,7 +132,7 @@ def _decode_operation(form, files) -> tuple[dict, bytes]:
     if not key:
         raise ValueError("Decryption key is required")
 
-    from cli import op_decode
+    from stegoforge import op_decode
     from core.audio._convert import has_ffmpeg
 
     filename = stego_file.filename or "stego.bin"
@@ -205,7 +205,7 @@ def create_app():
             if not upload:
                 return jsonify({"error": "No carrier file provided"}), 400
 
-            from cli import op_capacity
+            from stegoforge import op_capacity
 
             payload_size = len(payload.read()) if payload else 0
             filename = upload.filename or "carrier.bin"
@@ -277,7 +277,7 @@ def create_app():
             if not carrier_file or not payload_file or not key:
                 return jsonify({"error": "carrier, payload, and key are required"}), 400
 
-            from cli import op_encode
+            from stegoforge import op_encode
 
             with tempfile.TemporaryDirectory(prefix="stegoforge_web_survive_") as td:
                 td_path = Path(td)
@@ -361,7 +361,7 @@ def create_app():
                     yield _json_sse({"type": "error", "text": "Select at least one detector"})
                     return
 
-                from cli import op_detect
+                from stegoforge import op_detect
 
                 with tempfile.TemporaryDirectory(prefix="stegoforge_web_detectstream_") as td:
                     path = Path(td) / filename
@@ -473,7 +473,7 @@ def create_app():
             if not any([chi2, rs, exif, blind, ml, fingerprint, binary]):
                 return jsonify({"error": "Select at least one detector"}), 400
 
-            from cli import op_detect
+            from stegoforge import op_detect
 
             filename = upload.filename or "file.bin"
             with tempfile.TemporaryDirectory(prefix="stegoforge_web_detect_") as td:
@@ -505,7 +505,7 @@ def create_app():
             if not upload:
                 return jsonify({"error": "No file provided"}), 400
 
-            from cli import op_ctf
+            from stegoforge import op_ctf
 
             filename = upload.filename or "file.bin"
             extracted = None
@@ -552,7 +552,7 @@ def create_app():
             if not upload:
                 return jsonify({"error": "No file provided"}), 400
 
-            from cli import op_capacity
+            from stegoforge import op_capacity
 
             filename = upload.filename or "file.bin"
             with tempfile.TemporaryDirectory(prefix="stegoforge_web_capacity_") as td:

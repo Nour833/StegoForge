@@ -66,7 +66,7 @@ class BlindExtractor(BaseDetector):
 
         if ext in (".wav", ".flac", ".mp3", ".ogg"):
             # AUDIO BLIND EXTRACTION
-            from cli import get_encoder
+            from stegoforge import get_encoder
             for method_name in ["audio-lsb", "phase"]:
                 try:
                     encoder = get_encoder(method_name)

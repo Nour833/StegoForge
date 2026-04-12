@@ -7,9 +7,10 @@ setup(
     author="StegoForge",
     license="MIT",
     packages=find_packages(),
+    py_modules=["stegoforge"],
     python_requires=">=3.10",
     install_requires=open("requirements.txt").read().splitlines(),
     entry_points={
-        "console_scripts": ["stegoforge=cli:app"]
+        "console_scripts": ["stegoforge=stegoforge:app"]
     },
 )

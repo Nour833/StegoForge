@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-cli.py — StegoForge CLI
+stegoforge.py — StegoForge CLI
 
 Animated ASCII banner, interactive menu, and direct bypass arguments.
 All features accessible both interactively and via direct args.
