@@ -1,0 +1,101 @@
+name: Build & Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: stegoforge-linux-x86_64
+            is_linux: true
+          - os: windows-latest
+            artifact: stegoforge-windows-x86_64.exe
+            is_linux: false
+          - os: macos-latest
+            artifact: stegoforge-macos-arm64
+            is_linux: false
+
+    runs-on: ${{ matrix.os }}
+    # Only use container on linux
+    container: ${{ matrix.is_linux && 'python:3.10-slim-bullseye' || null }}
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        if: ${{ !matrix.is_linux }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install System Dependencies (Linux)
+        if: ${{ matrix.is_linux }}
+        run: |
+          apt-get update
+          apt-get install -y binutils
+          
+          
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller setuptools wheel
+          pip install -r requirements.txt
+          
+      - name: PyInstaller Build
+        run: pyinstaller stegoforge.spec
+
+      # MacOS Code Signing and Notarization
+      - name: Sign & Notarize (macOS)
+        if: ${{ runner.os == 'macOS' }}
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          if [ -z "$APPLE_TEAM_ID" ]; then
+            echo "No Apple Developer Secrets found, skipping code signing."
+            exit 0
+          fi
+          codesign --deep --force --options runtime --sign "Developer ID Application: $APPLE_TEAM_ID" dist/stegoforge
+          zip -r dist/stegoforge.zip dist/stegoforge
+          xcrun notarytool submit dist/stegoforge.zip --apple-id $APPLE_ID --team-id $APPLE_TEAM_ID --password $APPLE_APP_PASSWORD --wait
+          
+      - name: Rename Artifact
+        run: |
+          if [ "$RUNNER_OS" == "Windows" ]; then
+            mv dist/stegoforge.exe dist/${{ matrix.artifact }}
+          else
+            mv dist/stegoforge dist/${{ matrix.artifact }}
+          fi
+        shell: bash
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.artifact }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist-artifacts
+          
+      - name: Restructure Artifacts
+        run: |
+          mkdir release-assets
+          find dist-artifacts -type f -exec mv {} release-assets/ \;
+          ls -la release-assets/
+          
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          generate_release_notes: true

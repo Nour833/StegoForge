@@ -12,6 +12,14 @@ from pathlib import Path
 
 
 def _ffmpeg_cmd() -> str | None:
+    try:
+        from core import sysmgr
+        sys_ffmpeg = sysmgr.get_ffmpeg_path()
+        if sys_ffmpeg.exists():
+            return str(sys_ffmpeg)
+    except ImportError:
+        pass
+
     exe = shutil.which("ffmpeg")
     if exe:
         return exe

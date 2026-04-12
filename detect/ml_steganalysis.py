@@ -170,11 +170,19 @@ class MLSteganalysisDetector(BaseDetector):
         return model_path.exists() and model_path.stat().st_size > 0
 
     def _ensure_model(self) -> Path | None:
+        try:
+            from core import sysmgr
+            sys_model = sysmgr.MODELS_DIR / MODEL_NAME
+            if sys_model.exists() and sys_model.stat().st_size > 0:
+                return sys_model
+        except ImportError:
+            pass
+
         root = Path(__file__).resolve().parent.parent
         model_dir = root / "models"
         model_dir.mkdir(parents=True, exist_ok=True)
         model_path = model_dir / MODEL_NAME
-        if model_path.exists():
+        if model_path.exists() and model_path.stat().st_size > 0:
             return model_path
 
         # Preferred path: Hugging Face Hub API (handles LFS-backed files).

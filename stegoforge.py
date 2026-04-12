@@ -13,6 +13,7 @@ import io
 from pathlib import Path
 from typing import Optional
 
+from core import sysmgr
 import typer
 from rich.console import Console
 from rich.panel import Panel
@@ -1516,8 +1517,15 @@ def _launch_web(port: int = 5000):
 @app.callback(invoke_without_command=True)
 def main_callback(ctx: typer.Context):
     """StegoForge — The most complete open-source steganography toolkit."""
+    sysmgr.bootstrap_if_needed()
     if ctx.invoked_subcommand is None:
         interactive_menu()
+
+@app.command("init", help="Force repair/reset of offline assets (FFmpeg, ONNX models)")
+def cmd_init():
+    console.print(f"[{C_INFO}]Force resolving and syncing offline assets...[/{C_INFO}]")
+    sysmgr.bootstrap_if_needed(force=True)
+    console.print(f"[{C_SUCCESS}]Initialization complete.[/{C_SUCCESS}]")
 
 
 @app.command("encode", help="Embed a payload into a carrier file")
