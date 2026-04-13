@@ -80,8 +80,10 @@ class RSDetector(BaseDetector):
         r_n_ratio = R_n / n_groups
         s_n_ratio = S_n / n_groups
 
+        print(f"DEBUG: R={R} S={S} R_n={R_n} S_n={S_n} n_groups={n_groups}")
+
         # Estimate payload fraction using RS formula
-        # p ≈ (R - S) / (2 * (R - S) - (R_n - S_n)) — simplified Fridrich formula
+        # p ≈ (R - S) / (2 * (R - S) - (R_n - S_n))
         rs_diff = r_ratio - s_ratio
         neg_diff = r_n_ratio - s_n_ratio
         denominator = 2 * rs_diff - neg_diff
