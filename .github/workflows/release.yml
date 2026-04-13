@@ -1,101 +1,123 @@
-name: Build & Release
+name: Release Binaries
 
 on:
   push:
-    tags: ['v*']
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to update (example: v1.0.0)"
+        required: true
+        default: "v1.0.0"
 
 permissions:
   contents: write
 
 jobs:
   build:
+    name: Build ${{ matrix.asset_name }}
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
-            artifact: stegoforge-linux-x86_64
             is_linux: true
+            produced_name: stegoforge
+            asset_name: stegoforge-linux-x86_64
           - os: windows-latest
-            artifact: stegoforge-windows-x86_64.exe
             is_linux: false
-          - os: macos-latest
-            artifact: stegoforge-macos-arm64
+            produced_name: stegoforge.exe
+            asset_name: stegoforge-windows-x86_64.exe
+          - os: macos-14
             is_linux: false
+            produced_name: stegoforge
+            asset_name: stegoforge-macos-arm64
 
-    runs-on: ${{ matrix.os }}
-    # Only use container on linux
     container: ${{ matrix.is_linux && 'python:3.10-slim-bullseye' || null }}
-    
+
     steps:
-      - uses: actions/checkout@v4
-      
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Set up Python
         if: ${{ !matrix.is_linux }}
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: "3.10"
 
-      - name: Install System Dependencies (Linux)
+      - name: Install system deps (Linux)
         if: ${{ matrix.is_linux }}
         run: |
           apt-get update
           apt-get install -y binutils
-          
-          
-      - name: Install Dependencies
+
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install pyinstaller setuptools wheel
           pip install -r requirements.txt
-          
-      - name: PyInstaller Build
-        run: pyinstaller stegoforge.spec
+          pip install -r requirements-web.txt
 
-      # MacOS Code Signing and Notarization
-      - name: Sign & Notarize (macOS)
-        if: ${{ runner.os == 'macOS' }}
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-        run: |
-          if [ -z "$APPLE_TEAM_ID" ]; then
-            echo "No Apple Developer Secrets found, skipping code signing."
-            exit 0
-          fi
-          codesign --deep --force --options runtime --sign "Developer ID Application: $APPLE_TEAM_ID" dist/stegoforge
-          zip -r dist/stegoforge.zip dist/stegoforge
-          xcrun notarytool submit dist/stegoforge.zip --apple-id $APPLE_ID --team-id $APPLE_TEAM_ID --password $APPLE_APP_PASSWORD --wait
-          
-      - name: Rename Artifact
-        run: |
-          if [ "$RUNNER_OS" == "Windows" ]; then
-            mv dist/stegoforge.exe dist/${{ matrix.artifact }}
-          else
-            mv dist/stegoforge dist/${{ matrix.artifact }}
-          fi
+      - name: Build binary
+        run: pyinstaller stegoforge.spec --clean -y
+
+      - name: Quick web import smoke test
+        run: python -c "from web.app import create_app; create_app()"
+
+      - name: Prepare artifact
         shell: bash
+        run: |
+          mv "dist/${{ matrix.produced_name }}" "dist/${{ matrix.asset_name }}"
+          if [ "$RUNNER_OS" != "Windows" ]; then
+            chmod +x "dist/${{ matrix.asset_name }}"
+          fi
+          ls -lh "dist/${{ matrix.asset_name }}"
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: dist/${{ matrix.artifact }}
+          name: ${{ matrix.asset_name }}
+          path: dist/${{ matrix.asset_name }}
+          if-no-files-found: error
 
   release:
-    needs: build
+    name: Update release assets
     runs-on: ubuntu-latest
+    needs: build
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist-artifacts
-          
-      - name: Restructure Artifacts
+      - name: Resolve release tag
+        id: tag
+        shell: bash
         run: |
-          mkdir release-assets
-          find dist-artifacts -type f -exec mv {} release-assets/ \;
-          ls -la release-assets/
-          
-      - uses: softprops/action-gh-release@v2
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "value=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
         with:
-          files: release-assets/*
-          generate_release_notes: true
+          path: release-assets
+          merge-multiple: true
+
+      - name: Validate artifacts
+        run: |
+          ls -lh release-assets
+          test -f release-assets/stegoforge-linux-x86_64
+          test -f release-assets/stegoforge-windows-x86_64.exe
+          test -f release-assets/stegoforge-macos-arm64
+
+      - name: Publish assets to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.value }}
+          files: |
+            release-assets/stegoforge-linux-x86_64
+            release-assets/stegoforge-windows-x86_64.exe
+            release-assets/stegoforge-macos-arm64
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          generate_release_notes: false
