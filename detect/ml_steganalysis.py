@@ -132,7 +132,7 @@ class MLSteganalysisDetector(BaseDetector):
             return
 
         cls_dim = shape[-1]
-        if isinstance(cls_dim, int) and cls_dim > 100000:
+        if isinstance(cls_dim, int) and cls_dim > 2:
             raise ValueError(
                 f"Incompatible ONNX model output shape {shape}; expected binary steganalysis head"
             )

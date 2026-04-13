@@ -80,18 +80,16 @@ class RSDetector(BaseDetector):
         r_n_ratio = R_n / n_groups
         s_n_ratio = S_n / n_groups
 
-        print(f"DEBUG: R={R} S={S} R_n={R_n} S_n={S_n} n_groups={n_groups}")
-
         # Estimate payload fraction using RS formula
-        # p ≈ (R - S) / (2 * (R - S) - (R_n - S_n))
+        # p ≈ ( (R_n - S_n) - (R - S) ) / ( (R_n - S_n) + (R - S) )
         rs_diff = r_ratio - s_ratio
         neg_diff = r_n_ratio - s_n_ratio
-        denominator = 2 * rs_diff - neg_diff
+        denominator = neg_diff + rs_diff
 
         if abs(denominator) < 1e-10:
             estimated_fraction = 0.0
         else:
-            estimated_fraction = min(1.0, max(0.0, rs_diff / denominator if denominator != 0 else 0.0))
+            estimated_fraction = min(1.0, max(0.0, (neg_diff - rs_diff) / denominator if denominator != 0 else 0.0))
 
         # Confidence: high fraction → more confident in detection
         confidence = min(1.0, estimated_fraction * 2.0)
