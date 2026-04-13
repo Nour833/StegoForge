@@ -27,7 +27,13 @@ class Chi2Detector(BaseDetector):
 
     def analyze(self, file_bytes: bytes, filename: str = "") -> DetectionResult:
         try:
-            img = Image.open(io.BytesIO(file_bytes)).convert("RGB")
+            img = Image.open(io.BytesIO(file_bytes))
+            if img.mode in ("RGBA", "LA", "PA") or "transparency" in img.info:
+                img = img.convert("RGBA")
+                channels = ["R", "G", "B", "A"]
+            else:
+                img = img.convert("RGB")
+                channels = ["R", "G", "B"]
         except Exception as e:
             return DetectionResult(
                 method=self.name,
@@ -67,7 +73,7 @@ class Chi2Detector(BaseDetector):
 
         # Per-channel analysis for details
         channel_stats = {}
-        for c_idx, c_name in enumerate(["R", "G", "B"]):
+        for c_idx, c_name in enumerate(channels):
             channel = np.array(img)[:, :, c_idx].flatten().astype(np.int32)
             c_counts = np.bincount(channel, minlength=256)
             c_pairs = c_counts[:256].reshape(-1, 2)
