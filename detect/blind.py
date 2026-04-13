@@ -227,19 +227,19 @@ class BlindExtractor(BaseDetector):
 
         # Extract bits
         mask = (1 << depth) - 1
-        all_bits = []
-        for val in flat:
-            bits = []
-            for bit_pos in range(depth - 1, -1, -1):
-                bits.append((int(val) >> bit_pos) & 1)
-            all_bits.extend(bits)
+        vals = flat & mask
+        
+        # Vectorized bit extraction
+        shifts = np.arange(depth - 1, -1, -1, dtype=np.uint8)
+        all_bits = (vals[:, None] >> shifts) & 1
+        all_bits = all_bits.flatten()
 
         if len(all_bits) < HEADER_SIZE * 8:
             return None
 
         # Decode header
         header_bits = all_bits[:HEADER_SIZE * 8]
-        length_val = _bits_to_int(header_bits)
+        length_val = int(np.packbits(header_bits).view('>u4')[0])
 
         # Plausibility check
         max_possible = (len(all_bits) - HEADER_SIZE * 8) // 8
@@ -252,7 +252,7 @@ class BlindExtractor(BaseDetector):
             return None
 
         payload_bits = all_bits[HEADER_SIZE * 8:total_bits]
-        payload = _bits_to_bytes(payload_bits)
+        payload = np.packbits(payload_bits).tobytes()
 
         # Score the payload
         score = _score_payload(payload)
@@ -321,20 +321,3 @@ def _describe_payload(data: bytes) -> str:
         except Exception:
             return "High printable ASCII — likely text"
     return "Binary data"
-
-
-def _bits_to_int(bits: list[int]) -> int:
-    val = 0
-    for b in bits:
-        val = (val << 1) | b
-    return val
-
-
-def _bits_to_bytes(bits: list[int]) -> bytes:
-    result = []
-    for i in range(0, len(bits) - 7, 8):
-        val = 0
-        for b in bits[i:i + 8]:
-            val = (val << 1) | b
-        result.append(val)
-    return bytes(result)

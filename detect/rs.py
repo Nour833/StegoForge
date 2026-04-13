@@ -43,37 +43,7 @@ class RSDetector(BaseDetector):
 
         arr = np.array(img, dtype=np.int32).flatten()
 
-        # Discriminant function: sum of absolute differences between adjacent pixels in group
-        def discriminant(group: np.ndarray) -> float:
-            return float(np.sum(np.abs(np.diff(group))))
-
-        # Flipping function: toggle LSB of each pixel
-        def flip(group: np.ndarray) -> np.ndarray:
-            return group ^ 1  # XOR with 1 flips LSB
-
-        # Inverse flip: complement flipping (flip 0→-1, 1→0 in terms of pair)
-        def flip_neg(group: np.ndarray) -> np.ndarray:
-            return group ^ 1  # same as flip for simplicity (standard RS uses F-{})
-
         n_groups = len(arr) // GROUP_SIZE
-        R, S, R_n, S_n = 0, 0, 0, 0
-
-        for i in range(n_groups):
-            group = arr[i * GROUP_SIZE:(i + 1) * GROUP_SIZE]
-            d_orig = discriminant(group)
-            d_flip = discriminant(flip(group))
-            d_flip_n = discriminant(flip_neg(group))
-
-            if d_flip > d_orig:
-                R += 1
-            elif d_flip < d_orig:
-                S += 1
-
-            if d_flip_n > d_orig:
-                R_n += 1
-            elif d_flip_n < d_orig:
-                S_n += 1
-
         if n_groups == 0:
             return DetectionResult(
                 method=self.name,
@@ -81,6 +51,26 @@ class RSDetector(BaseDetector):
                 confidence=0.0,
                 details={"error": "Image too small for RS analysis"},
             )
+
+        arr_trunc = arr[:n_groups * GROUP_SIZE]
+        groups = arr_trunc.reshape(-1, GROUP_SIZE)
+
+        # Discriminant function: sum of absolute differences between adjacent pixels in group
+        d_orig = np.sum(np.abs(np.diff(groups, axis=1)), axis=1)
+
+        # Flipped groups (toggle LSB) and their discriminants
+        groups_flip = groups ^ 1
+        d_flip = np.sum(np.abs(np.diff(groups_flip, axis=1)), axis=1)
+
+        # Inverse flip groups and discriminants (for simplicity same as flip in original)
+        groups_flip_n = groups ^ 1
+        d_flip_n = np.sum(np.abs(np.diff(groups_flip_n, axis=1)), axis=1)
+
+        # Count Regular and Singular groups
+        R = int(np.sum(d_flip > d_orig))
+        S = int(np.sum(d_flip < d_orig))
+        R_n = int(np.sum(d_flip_n > d_orig))
+        S_n = int(np.sum(d_flip_n < d_orig))
 
         r_ratio = R / n_groups
         s_ratio = S / n_groups
