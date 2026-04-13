@@ -55,15 +55,18 @@ class RSDetector(BaseDetector):
         arr_trunc = arr[:n_groups * GROUP_SIZE]
         groups = arr_trunc.reshape(-1, GROUP_SIZE)
 
-        # Discriminant function: sum of absolute differences between adjacent pixels in group
+        MASK = np.array([0, 1, 1, 0], dtype=np.int32)
         d_orig = np.sum(np.abs(np.diff(groups, axis=1)), axis=1)
 
-        # Flipped groups (toggle LSB) and their discriminants
-        groups_flip = groups ^ 1
+        # Flipped groups (toggle LSB for masked pixels)
+        groups_flip = groups ^ MASK
         d_flip = np.sum(np.abs(np.diff(groups_flip, axis=1)), axis=1)
 
-        # Inverse flip groups and discriminants
-        groups_flip_n = np.where(groups % 2 == 0, groups - 1, groups + 1)
+        # Inverse flip (F-1) for masked pixels
+        # If masked and even -> -1, if masked and odd -> +1
+        f_neg_mask = np.zeros_like(groups)
+        f_neg_mask[:, MASK == 1] = np.where(groups[:, MASK == 1] % 2 == 0, -1, 1)
+        groups_flip_n = groups + f_neg_mask
         d_flip_n = np.sum(np.abs(np.diff(groups_flip_n, axis=1)), axis=1)
 
         # Count Regular and Singular groups

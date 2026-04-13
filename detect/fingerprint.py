@@ -33,10 +33,15 @@ class FingerprintDetector(BaseDetector):
         score_map = self._anomaly_map(residual)
 
         # High z-score regions imply local residual inconsistency.
-        threshold = float(np.mean(score_map) + 2.5 * np.std(score_map))
+        threshold = float(np.mean(score_map) + 4.0 * np.std(score_map))
         anomalous_fraction = float(np.mean(score_map > threshold))
-        confidence = float(min(1.0, anomalous_fraction * 12.0))
-        detected = confidence >= 0.25
+        
+        # A normal image will still have about 0.1% ~ 0.5% of pixels beyond 4 sigma due to heavy tails. We baseline it.
+        baseline = 0.005
+        excess = max(0.0, anomalous_fraction - baseline)
+        
+        confidence = float(min(1.0, excess * 100.0))
+        detected = confidence >= 0.40
 
         heatmap_b64 = None
         if detected:
