@@ -152,7 +152,12 @@ def _decode_operation(form, files) -> tuple[dict, bytes]:
 
 
 def create_app():
-    app = Flask(__name__, template_folder="templates", static_folder="static")
+    if getattr(sys, 'frozen', False):
+        template_folder = os.path.join(sys._MEIPASS, 'web', 'templates')
+        static_folder = os.path.join(sys._MEIPASS, 'web', 'static')
+        app = Flask(__name__, template_folder=template_folder, static_folder=static_folder)
+    else:
+        app = Flask(__name__, template_folder="templates", static_folder="static")
     CORS(app)
     app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024  # 200MB max upload
 
@@ -571,6 +576,8 @@ def create_app():
 
 
 if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.freeze_support()
     import argparse
 
     parser = argparse.ArgumentParser()

@@ -2321,5 +2321,8 @@ def cmd_web(
         raise typer.Exit(1)
 
 
+import multiprocessing
+
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
     app()
