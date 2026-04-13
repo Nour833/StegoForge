@@ -42,16 +42,12 @@ class Chi2Detector(BaseDetector):
         counts = np.bincount(arr, minlength=256)
 
         # Group into pairs (2k, 2k+1)
-        chi2_stat = 0.0
-        n_pairs = 0
-        for k in range(0, 256, 2):
-            observed_0 = counts[k]
-            observed_1 = counts[k + 1]
-            expected = (observed_0 + observed_1) / 2.0
-            if expected > 0:
-                chi2_stat += ((observed_0 - expected) ** 2 + (observed_1 - expected) ** 2) / expected
-                n_pairs += 1
-
+        pairs = counts[:256].reshape(-1, 2)
+        valid_pairs = np.sum(pairs, axis=1) > 0
+        valid_p = pairs[valid_pairs]
+        expected = np.sum(valid_p, axis=1) / 2.0
+        
+        n_pairs = len(valid_p)
         if n_pairs == 0:
             return DetectionResult(
                 method=self.name,
@@ -59,6 +55,8 @@ class Chi2Detector(BaseDetector):
                 confidence=0.0,
                 details={"error": "No valid pixel pairs found"},
             )
+            
+        chi2_stat = np.sum(((valid_p[:, 0] - expected) ** 2 + (valid_p[:, 1] - expected) ** 2) / expected)
 
         # Degrees of freedom = number of pairs
         p_value = chi2_dist.sf(chi2_stat, df=n_pairs)
@@ -72,15 +70,15 @@ class Chi2Detector(BaseDetector):
         for c_idx, c_name in enumerate(["R", "G", "B"]):
             channel = np.array(img)[:, :, c_idx].flatten().astype(np.int32)
             c_counts = np.bincount(channel, minlength=256)
-            c_chi2 = 0.0
-            c_pairs = 0
-            for k in range(0, 256, 2):
-                exp = (c_counts[k] + c_counts[k + 1]) / 2.0
-                if exp > 0:
-                    c_chi2 += ((c_counts[k] - exp) ** 2 + (c_counts[k + 1] - exp) ** 2) / exp
-                    c_pairs += 1
-            if c_pairs > 0:
-                c_pval = float(chi2_dist.sf(c_chi2, df=c_pairs))
+            c_pairs = c_counts[:256].reshape(-1, 2)
+            c_valid_mask = np.sum(c_pairs, axis=1) > 0
+            c_valid = c_pairs[c_valid_mask]
+            
+            c_n_pairs = len(c_valid)
+            if c_n_pairs > 0:
+                c_exp = np.sum(c_valid, axis=1) / 2.0
+                c_chi2 = np.sum(((c_valid[:, 0] - c_exp) ** 2 + (c_valid[:, 1] - c_exp) ** 2) / c_exp)
+                c_pval = float(chi2_dist.sf(c_chi2, df=c_n_pairs))
                 channel_stats[c_name] = {"chi2": round(c_chi2, 4), "p_value": round(c_pval, 4)}
 
         return DetectionResult(

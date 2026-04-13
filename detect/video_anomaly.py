@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
-from scipy.fft import dct
+from scipy.fft import dct, dctn
 
 from detect.base import BaseDetector, DetectionResult
 
@@ -97,12 +97,23 @@ def _frame_score(gray: np.ndarray) -> float:
     h8 = h - (h % 8)
     w8 = w - (w % 8)
     g = gray[:h8, :w8].astype(np.float32)
-    vals = []
-    for r in range(0, h8, 8):
-        for c in range(0, w8, 8):
-            block = g[r:r + 8, c:c + 8]
-            coeff = dct(dct(block.T, norm="ortho").T, norm="ortho")
-            vals.append(abs(float(coeff[3, 4])) + abs(float(coeff[4, 3])))
-    if not vals:
+    
+    if h8 == 0 or w8 == 0:
         return 0.0
+        
+    # Shape into blocks of 8x8
+    # g shape is (h8, w8)
+    blocks = g.reshape(h8 // 8, 8, w8 // 8, 8).transpose(0, 2, 1, 3)
+    
+    # blocks shape is (h8//8, w8//8, 8, 8)
+    # apply 2D DCT on last two dimensions
+    # scipy.fft.dctn can do multi-dimensional DCT directly
+    from scipy.fft import dctn
+    coeffs = dctn(blocks, axes=(2, 3), norm="ortho")
+    
+    # We want coeff[3, 4] and coeff[4, 3] from each 8x8 block
+    v1 = np.abs(coeffs[:, :, 3, 4])
+    v2 = np.abs(coeffs[:, :, 4, 3])
+    vals = v1 + v2
+    
     return float(np.mean(vals))
