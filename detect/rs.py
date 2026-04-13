@@ -62,8 +62,8 @@ class RSDetector(BaseDetector):
         groups_flip = groups ^ 1
         d_flip = np.sum(np.abs(np.diff(groups_flip, axis=1)), axis=1)
 
-        # Inverse flip groups and discriminants (for simplicity same as flip in original)
-        groups_flip_n = groups ^ 1
+        # Inverse flip groups and discriminants
+        groups_flip_n = np.where(groups % 2 == 0, groups - 1, groups + 1)
         d_flip_n = np.sum(np.abs(np.diff(groups_flip_n, axis=1)), axis=1)
 
         # Count Regular and Singular groups

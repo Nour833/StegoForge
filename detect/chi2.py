@@ -17,8 +17,8 @@ from PIL import Image
 
 from detect.base import BaseDetector, DetectionResult
 
-# Threshold above which we flag as detected
-CONFIDENCE_THRESHOLD = 0.7
+# Threshold above which we flag as detected (usually 0.95 or 0.99 for significance)
+CONFIDENCE_THRESHOLD = 0.95
 
 
 class Chi2Detector(BaseDetector):
@@ -43,7 +43,7 @@ class Chi2Detector(BaseDetector):
 
         # Group into pairs (2k, 2k+1)
         pairs = counts[:256].reshape(-1, 2)
-        valid_pairs = np.sum(pairs, axis=1) > 0
+        valid_pairs = np.sum(pairs, axis=1) > 4  # Expected >= 2.5 to avoid division by near zero / sparse bins inflating chi2
         valid_p = pairs[valid_pairs]
         expected = np.sum(valid_p, axis=1) / 2.0
         
@@ -71,7 +71,7 @@ class Chi2Detector(BaseDetector):
             channel = np.array(img)[:, :, c_idx].flatten().astype(np.int32)
             c_counts = np.bincount(channel, minlength=256)
             c_pairs = c_counts[:256].reshape(-1, 2)
-            c_valid_mask = np.sum(c_pairs, axis=1) > 0
+            c_valid_mask = np.sum(c_pairs, axis=1) > 4
             c_valid = c_pairs[c_valid_mask]
             
             c_n_pairs = len(c_valid)

@@ -177,7 +177,10 @@ class MLSteganalysisDetector(BaseDetector):
         max_v = float(np.max(flat))
         exps = np.exp(np.clip(flat - max_v, -60.0, 60.0))
         probs = exps / max(float(np.sum(exps)), 1e-9)
-        return float(np.clip(float(np.max(probs)), 0.0, 1.0))
+        if len(probs) >= 2:
+            return float(np.clip(probs[1], 0.0, 1.0))
+        else:
+            return float(np.clip(probs[0], 0.0, 1.0))
 
     def _ensure_model(self) -> Path | None:
         # Preferred path: bundled offline model shipped with repo/release.
