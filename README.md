@@ -248,5 +248,6 @@ Pull requests are heavily welcomed. Please ensure new encoding methods implement
 
 <div align="center">
   <b>Built by Nour833. Coded for the community.</b><br>
+  <i>If you find StegoForge useful, educational, or just plain cool, consider leaving a ⭐!</i><br><br>
   <a href="../../issues">Report a Bug</a> • <a href="../../issues">Request a Feature</a>
 </div>
