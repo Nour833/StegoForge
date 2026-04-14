@@ -8,7 +8,7 @@
   [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
   [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
   [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey?style=for-the-badge)](https://github.com/Nour833/StegoForge/releases)
-  [![CTF](https://img.shields.io/badge/CTF-Ready-red?style=for-the-badge)]()
+  [![CTF](https://img.shields.io/badge/CTF-Ready-red?style=for-the-badge)](#-3-blind-forensics--ctf-mode-zero-knowledge)
 </div>
 
 ---
@@ -25,6 +25,8 @@ Head over to the **[Releases Page](https://github.com/Nour833/StegoForge/release
 ---
 
 ## 🧠 What is StegoForge?
+
+> **The Concept in Plain English:** *Steganography is the art of hiding secrets in plain sight. StegoForge takes your secret message or file and mathematically weaves it into the pixels of a normal photo, the soundwaves of a song, or the frames of a video. To the rest of the world, it just looks like a regular meme or MP3 track. To you, it's an invisible vault.*
 
 StegoForge is a **modular, enterprise-grade steganography toolkit** engineered for the full lifecycle of covert data: from embedding payloads into images, audio, video, and active network protocols, to deploying machine-learning steganalysis to forcibly extract anomalies from suspicious carrier files. 
 
