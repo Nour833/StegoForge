@@ -90,8 +90,9 @@ class PaletteEncoder(BaseEncoder):
                     old_to_new[old_idx] = new_idx
                     break
 
-        # Remap pixels
-        pixels = list(img.getdata())
+        # Remap pixels (use numpy to avoid Pillow 14 getdata() deprecation)
+        import numpy as np
+        pixels = np.array(img).flatten().tolist()
         new_pixels = [old_to_new.get(p, p) for p in pixels]
 
         stego_img = img.copy()

@@ -131,6 +131,8 @@ function updateFileInfo(input, infoEl, dropEl) {
   ['cap-payload-drop', 'cap-payload', 'cap-payload-info'],
   ['survive-carrier-drop', 'survive-carrier', 'survive-carrier-info'],
   ['survive-payload-drop', 'survive-payload', 'survive-payload-info'],
+  ['diff-cover-drop', 'diff-cover', 'diff-cover-info'],
+  ['diff-stego-drop', 'diff-stego', 'diff-stego-info'],
 ].forEach(([drop, input, info]) => setupDropZone($(drop), $(input), $(info)));
 
 function setupPasswordToggle(btnId, inputId) {
@@ -546,7 +548,7 @@ function b64toBlob(b64Data, contentType = 'application/octet-stream') {
   const result = $('decode-result');
   if (!form) return;
 
-  form.addEventListener('submit', async (e) => {
+    form.addEventListener('submit', async (e) => {
     e.preventDefault();
     result.style.display = 'none';
     showLoading('Decoding payload...');
@@ -563,16 +565,33 @@ function b64toBlob(b64Data, contentType = 'application/octet-stream') {
       const disposition = response.headers.get('content-disposition') || '';
       const match = disposition.match(/filename="?([^\"]+)"?/);
       const filename = match ? match[1] : 'decoded_payload.bin';
+      const contentType = response.headers.get('content-type') || 'application/octet-stream';
+      const sfrgHint = response.headers.get('x-stegoforge-hint') || '';
 
       const url = URL.createObjectURL(blob);
-      const textCandidate = await blob.text();
-      const isText = blob.size <= 32768 && /^(?:[\x09\x0A\x0D\x20-\x7E]|[\u00A0-\uFFFF])*$/u.test(textCandidate);
 
-      result.innerHTML = `${renderSuccess(`Decoded payload ready: <strong>${filename}</strong>`)}`;
-      if (isText) {
-        result.innerHTML += `<div class="result-card"><div class="result-title accent-title">Inline Payload Preview</div><textarea class="form-input" rows="10" readonly>${textCandidate.replace(/</g, '&lt;')}</textarea></div>`;
+      result.innerHTML = `${renderSuccess(`Decoded payload: <strong>${filename}</strong>${sfrgHint ? ' <span style="color:var(--accent-yellow)">(encrypted blob detected)</span>' : ''} `)}`;
+
+      // Inline preview based on MIME
+      if (contentType.startsWith('image/')) {
+        result.innerHTML += `<div class="result-card"><div class="result-title accent-title">Image Preview</div><img src="${url}" alt="Decoded image" style="max-width:100%;border-radius:8px;border:1px solid var(--border-subtle)"></div>`;
+      } else if (contentType.startsWith('audio/')) {
+        result.innerHTML += `<div class="result-card"><div class="result-title accent-title">Audio Preview</div><audio controls src="${url}" style="width:100%"></audio></div>`;
+      } else if (contentType === 'text/plain' && blob.size <= 32768) {
+        const textCandidate = await blob.text();
+        result.innerHTML += `<div class="result-card"><div class="result-title accent-title">Inline Preview</div><textarea class="form-input" rows="10" readonly>${textCandidate.replace(/</g, '&lt;')}</textarea></div>`;
+      } else if (blob.size <= 32768) {
+        // fallback: try text
+        const textCandidate = await blob.text();
+        const isText = /^(?:[\x09\x0A\x0D\x20-\x7E]|[\u00A0-\uFFFF])*$/u.test(textCandidate);
+        if (isText) result.innerHTML += `<div class="result-card"><div class="result-title accent-title">Inline Preview</div><textarea class="form-input" rows="10" readonly>${textCandidate.replace(/</g, '&lt;')}</textarea></div>`;
       }
-      result.innerHTML += `<div class="result-card"><a class="btn btn-primary" href="${url}" download="${filename}">Download Payload</a></div>`;
+
+      if (sfrgHint) {
+        result.innerHTML += `<div class="result-card" style="border-color:rgba(255,215,64,0.4);background:rgba(255,215,64,0.05)"><div class="result-title warn-title">ℹ Encrypted Payload Detected</div><p style="font-size:.88rem;color:var(--text-secondary)">${sfrgHint}</p></div>`;
+      }
+
+      result.innerHTML += `<div class="result-card"><a class="btn btn-primary" href="${url}" download="${filename}">⬇ Download ${filename}</a></div>`;
       result.style.display = 'block';
     } catch (err) {
       result.innerHTML = renderError(err.message);
@@ -660,13 +679,84 @@ function b64toBlob(b64Data, contentType = 'application/octet-stream') {
       });
 
       if (data.notes && data.notes.length) {
-        html += `<div class="result-card"><div class="result-title warn-title">CTF Notes</div><ul class="findings-list">${data.notes.map((n) => `<li class="finding-low">${n}</li>`).join('')}</ul></div>`;
+        const notesHtml = data.notes.map(n => {
+          if (n.includes("SFRG magic") || n.includes("AES-256-GCM")) {
+            return `
+              <div class="result-card" style="background: rgba(234, 179, 8, 0.05); border: 1px solid rgba(234, 179, 8, 0.2); margin-bottom: 16px; border-left: 4px solid var(--accent-highlight);">
+                <div style="display: flex; align-items: flex-start; gap: 14px;">
+                  <div style="font-size: 1.8rem; filter: sepia(1) hue-rotate(-20deg) saturate(3);">🔒</div>
+                  <div>
+                    <h4 style="margin: 0 0 6px 0; color: var(--accent-highlight); font-size: 1.05rem;">Encrypted Payload Extracted</h4>
+                    <p style="margin: 0 0 8px 0; font-size: 0.9rem; color: var(--text-muted); line-height: 1.4;">
+                      The data was successfully ripped from the carrier, but it is an encrypted StegoForge object (<b>.sfrg</b> file).
+                    </p>
+                    <div style="background: rgba(0,0,0,0.2); padding: 10px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); font-size: 0.85rem; color: var(--text-muted);">
+                      <strong style="color: #fff;">How to decrypt it:</strong><br/>
+                      1. Download the <code>.sfrg</code> file below.<br/>
+                      2. Go to the <b>Decode</b> tab.<br/>
+                      3. Upload the <code>.sfrg</code> file as your Challenge File and enter the correct password!
+                    </div>
+                  </div>
+                </div>
+              </div>
+            `;
+          } else if (n.includes("✔")) {
+             return `
+              <div class="result-card success" style="margin-bottom: 16px;">
+                <div style="display: flex; align-items: flex-start; gap: 14px;">
+                  <div style="font-size: 1.8rem;">🔓</div>
+                  <div>
+                    <h4 style="margin: 0 0 6px 0; color: var(--accent-success); font-size: 1.05rem;">Keyless Payload Extracted</h4>
+                    <p style="margin: 0; font-size: 0.9rem; color: var(--text-muted); line-height: 1.4;">
+                      ${n.replace('✔ ', '')}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            `;
+          } else if (n.includes("ℹ")) {
+             return `
+              <div class="result-card" style="background: var(--bg-secondary); border: 1px solid var(--border-subtle); margin-bottom: 16px;">
+                <div style="display: flex; align-items: flex-start; gap: 14px;">
+                  <div style="font-size: 1.8rem;">💡</div>
+                  <div>
+                    <h4 style="margin: 0 0 6px 0; color: var(--text-normal); font-size: 1.05rem;">Analysis Insight</h4>
+                    <p style="margin: 0; font-size: 0.9rem; color: var(--text-muted); line-height: 1.4;">
+                      ${n.replace('ℹ ', '')}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            `;
+          } else {
+             return `<div class="result-card" style="margin-bottom:16px; padding:12px; background:var(--bg-modifier-hover); border-radius:6px; font-size:0.9rem;">${n}</div>`;
+          }
+        }).join('');
+        
+        html += `<div style="margin-top: 20px;">${notesHtml}</div>`;
       }
 
       if (data.has_extracted_payload && data.extracted_payload_b64) {
-        const blob = b64toBlob(data.extracted_payload_b64);
+        const extractedMime = data.extracted_payload_mime || 'application/octet-stream';
+        const extractedExt  = data.extracted_payload_ext  || '.bin';
+        const blob = b64toBlob(data.extracted_payload_b64, extractedMime);
         const url = URL.createObjectURL(blob);
-        html += `<div class="result-card success"><div class="result-title success-title">Extracted payload ready</div><a class="btn btn-primary" href="${url}" download="extracted_payload.bin">Download Extracted Payload</a></div>`;
+        const dlName = `extracted_payload${extractedExt}`;
+        let previewHtml = '';
+        if (extractedMime.startsWith('image/')) {
+          previewHtml = `<div style="margin-top:12px"><img src="${url}" alt="Extracted image payload" style="max-width:100%;border-radius:8px;border:1px solid var(--border-subtle)"></div>`;
+        } else if (extractedMime === 'text/plain' && blob.size <= 32768) {
+          const textContent = await blob.text();
+          previewHtml = `<div style="margin-top:12px"><textarea class="form-input" rows="8" readonly>${textContent.replace(/</g, '&lt;')}</textarea></div>`;
+        } else if (extractedMime.startsWith('audio/')) {
+          previewHtml = `<div style="margin-top:12px"><audio controls src="${url}" style="width:100%"></audio></div>`;
+        } else if (blob.size <= 32768) {
+          const textContent = await blob.text();
+          if (/^(?:[\x09\x0A\x0D\x20-\x7E]|[\u00A0-\uFFFF])*$/u.test(textContent)) {
+             previewHtml = `<div style="margin-top:12px"><textarea class="form-input" rows="8" readonly>${textContent.replace(/</g, '&lt;')}</textarea></div>`;
+          }
+        }
+        html += `<div class="result-card success"><div class="result-title success-title">Extracted payload ready — <code>${dlName}</code></div>${previewHtml}<a class="btn btn-primary" style="margin-top:12px" href="${url}" download="${dlName}">⬇ Download ${dlName}</a></div>`;
       }
 
       latestCTFText = `Verdict: ${data.verdict}\nConfidence: ${pct}%\n`;
@@ -736,12 +826,35 @@ function b64toBlob(b64Data, contentType = 'application/octet-stream') {
         extra += `<div class="result-key">Video context</div><div class="result-val">${v.duration_seconds}s, ${v.frames} frames, ${v.keyframes} keyframes</div>`;
       }
 
+      let stealthHtml = '';
+      if (data.stealth_score !== undefined) {
+        const score = data.stealth_score;
+        let label, color;
+        if (score >= 75) { label = 'High'; color = 'var(--accent-green)'; }
+        else if (score >= 50) { label = 'Fair'; color = 'var(--accent-yellow)'; }
+        else if (score >= 25) { label = 'Low'; color = 'var(--accent-red)'; }
+        else { label = 'Very Low'; color = 'var(--accent-red)'; }
+        
+        stealthHtml = `
+          <div class="result-key">Stealth</div>
+          <div class="result-val">
+            <div style="display:flex;align-items:center;gap:8px;margin-top:2px">
+              <div style="flex:1;height:4px;background:var(--bg-elevated);border-radius:2px;overflow:hidden">
+                <div style="width:${score}%;height:100%;background:${color};border-radius:2px"></div>
+              </div>
+              <span style="font-size:.8rem;color:${color}">${label} (${score}/100)</span>
+            </div>
+          </div>
+        `;
+      }
+
       result.innerHTML = `<div class="result-card success">
         <div class="result-title success-title">Capacity Result</div>
         <div class="result-grid">
           <div class="result-key">File</div><div class="result-val">${data.file}</div>
           <div class="result-key">Method</div><div class="result-val cyan">${data.method}</div>
           <div class="result-key">Depth</div><div class="result-val">${data.depth} bit(s)</div>
+          ${stealthHtml}
           <div class="result-key">Capacity</div><div class="result-val green">${Number(data.capacity_bytes || 0).toLocaleString()} bytes</div>
           <div class="result-key"></div><div class="result-val">${Number(data.capacity_kb || 0).toFixed(2)} KB / ${Number(data.capacity_mb || 0).toFixed(4)} MB</div>
           ${extra}
@@ -794,4 +907,141 @@ function b64toBlob(b64Data, contentType = 'application/octet-stream') {
   });
 })();
 
+// Diff
+(function initDiff() {
+  const form = $('diff-form');
+  const result = $('diff-result');
+  if (!form) return;
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    result.style.display = 'none';
+    showLoading('Analyzing differences. This might take a moment...');
+
+    try {
+      const formData = new FormData(form);
+      const response = await fetch('/diff', { method: 'POST', body: formData });
+      const data = await response.json();
+      if (data.error) throw new Error(data.error);
+
+      let metricsHtml = '';
+      if (data.type === 'image') {
+        metricsHtml = `
+          <div class="result-key">Pixels changed</div><div class="result-val">${(data.changed_pixels || 0).toLocaleString()} <span style="color:var(--text-muted);font-size:0.8rem">(${data.changed_percent}%)</span></div>
+          <div class="result-key">Max delta</div><div class="result-val">${data.max_delta}</div>
+          <div class="result-key">Mean delta</div><div class="result-val">${(data.mean_delta || 0).toFixed(4)}</div>
+        `;
+      } else {
+        const changedBytes = data.differing_bytes ?? data.changed_bytes ?? 0;
+        const changedPercent = data.differing_percent ?? data.changed_percent ?? 0;
+        metricsHtml = `<div class="result-key">Bytes changed</div><div class="result-val">${Number(changedBytes).toLocaleString()} <span style="color:var(--text-muted);font-size:0.8rem">(${changedPercent}%)</span></div>`;
+      }
+
+      result.innerHTML = `<div class="result-card success">
+        <div class="result-title success-title">Diff Analysis Complete</div>
+        <div class="result-grid" style="margin-bottom:16px;">
+          <div class="result-key">Type</div><div class="result-val cyan">${data.type}</div>
+          ${metricsHtml}
+        </div>
+        ${data.heatmap_b64 ? `<div style="text-align:center;margin-top:12px;border:1px solid var(--border-subtle);border-radius:var(--radius-md);overflow:hidden;background:#000;"><img src="${data.heatmap_b64}" style="max-width:100%;height:auto;display:block;margin:0 auto;" alt="Heatmap showing changed pixels"></div>` : ''}
+        ${data.notes ? `<p style="margin-top:12px;font-size:0.85rem;color:var(--text-secondary)">${data.notes}</p>` : ''}
+      </div>`;
+      result.style.display = 'block';
+    } catch (err) {
+      result.innerHTML = renderError(err.message);
+      result.style.display = 'block';
+    } finally {
+      hideLoading();
+    }
+  });
+})();
+
 initPlatformProfiles();
+
+// ── Key Strength Meter ────────────────────────────────────────────────────────
+function calcKeyStrength(pw) {
+  if (!pw) return 0;
+  const len = pw.length;
+  // character variety score
+  let variety = 0;
+  if (/[a-z]/.test(pw)) variety += 1;
+  if (/[A-Z]/.test(pw)) variety += 1;
+  if (/[0-9]/.test(pw)) variety += 1;
+  if (/[^a-zA-Z0-9]/.test(pw)) variety += 1;
+  // Shannon entropy (bits/char)
+  const freq = {};
+  for (const ch of pw) freq[ch] = (freq[ch] || 0) + 1;
+  let entropy = 0;
+  for (const n of Object.values(freq)) {
+    const p = n / len;
+    entropy -= p * Math.log2(p);
+  }
+  // Composite score 0-100
+  const lenScore     = Math.min(len / 20, 1) * 40;
+  const varScore     = (variety / 4) * 30;
+  const entScore     = Math.min(entropy / 4, 1) * 30;
+  return Math.round(lenScore + varScore + entScore);
+}
+
+function setupKeyStrengthMeter(inputId, meterId) {
+  const input = $(inputId);
+  const meter = $(meterId);
+  if (!input || !meter) return;
+  function update() {
+    const score = calcKeyStrength(input.value);
+    let label, color;
+    if (score >= 75) { label = 'Strong';   color = 'var(--accent-green)'; }
+    else if (score >= 50) { label = 'Fair';    color = 'var(--accent-yellow)'; }
+    else if (score >= 25) { label = 'Weak';    color = 'var(--accent-red)'; }
+    else { label = 'Very weak'; color = 'var(--accent-red)'; }
+    meter.innerHTML = `
+      <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
+        <div style="flex:1;height:3px;background:var(--bg-elevated);border-radius:2px;overflow:hidden">
+          <div style="width:${score}%;height:100%;background:${color};border-radius:2px;transition:width .3s,background .3s"></div>
+        </div>
+        <span style="font-size:.72rem;color:${color};min-width:60px">${label} (${score}%)</span>
+      </div>`;
+  }
+  input.addEventListener('input', update);
+  update();
+}
+
+setupKeyStrengthMeter('enc-key', 'enc-key-strength');
+
+// ── Carrier Drop Preview (Encode) ─────────────────────────────────────────────
+(function initCarrierPreview() {
+  const carrierInput = $('enc-carrier');
+  const previewBox = $('enc-carrier-preview');
+  if (!carrierInput || !previewBox) return;
+  carrierInput.addEventListener('change', () => {
+    const file = carrierInput.files && carrierInput.files[0];
+    if (!file) { previewBox.style.display = 'none'; return; }
+    if (file.type.startsWith('image/')) {
+      const url = URL.createObjectURL(file);
+      previewBox.innerHTML = `<img src="${url}" alt="Carrier preview" style="max-height:120px;border-radius:8px;border:1px solid var(--border-subtle);margin-top:8px">`;
+      previewBox.style.display = 'block';
+    } else {
+      previewBox.style.display = 'none';
+    }
+  });
+})();
+
+// ── Mobile Nav Hamburger ──────────────────────────────────────────────────────
+(function initMobileNav() {
+  const hamburger = $('mobile-nav-toggle');
+  const navMenu   = document.querySelector('.tab-nav');
+  if (!hamburger || !navMenu) return;
+  hamburger.addEventListener('click', () => {
+    const open = navMenu.classList.toggle('mobile-open');
+    hamburger.setAttribute('aria-expanded', String(open));
+    hamburger.textContent = open ? '✕' : '☰';
+  });
+  // Close nav when a tab is selected on mobile
+  document.querySelectorAll('.tab-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      navMenu.classList.remove('mobile-open');
+      hamburger.textContent = '☰';
+      hamburger.setAttribute('aria-expanded', 'false');
+    });
+  });
+})();

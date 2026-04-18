@@ -1,695 +1,851 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>StegoForge — Steganography Toolkit</title>
-<meta name="description" content="StegoForge: Hide secrets in images, audio, and documents. Detect hidden data. Full steganography toolkit.">
-<link rel="icon" type="image/svg+xml" href="/static/stegoforge-favicon.svg">
-<link rel="shortcut icon" type="image/svg+xml" href="/static/stegoforge-favicon.svg">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Outfit:wght@400;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/style.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>StegoForge — Steganography Toolkit</title>
+  <meta name="description"
+    content="StegoForge: Hide secrets in images, audio, and documents. Detect hidden data. Full steganography toolkit.">
+  <link rel="icon" type="image/svg+xml" href="/static/stegoforge-favicon.svg">
+  <link rel="shortcut icon" type="image/svg+xml" href="/static/stegoforge-favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Outfit:wght@400;600;700;800&display=swap"
+    rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
 </head>
+
 <body data-initial-tab="{{ initial_tab|default('encode') }}">
-<div id="ambient-mesh"></div>
-<!-- Local processing notice -->
-<div id="local-notice">
-  🔒 All files are processed <strong>locally</strong> on your machine. Nothing is uploaded to any server.
-</div>
-
-<!-- Header -->
-<header class="site-header">
-  <div class="header-inner">
-    <div class="logo-area">
-      <div class="logo-icon">⚒</div>
-      <div>
-        <div class="logo-text">StegoForge</div>
-        <div class="logo-tagline">Steganography Toolkit</div>
-      </div>
-    </div>
-    <nav class="tab-nav">
-      <button class="tab-btn active" data-tab="encode" id="nav-encode">Encode</button>
-      <button class="tab-btn" data-tab="decode" id="nav-decode">Decode</button>
-      <button class="tab-btn" data-tab="detect" id="nav-detect">Detect</button>
-      <button class="tab-btn ctf-btn" data-tab="ctf" id="nav-ctf">⚡ CTF Mode</button>
-      <button class="tab-btn" data-tab="capacity" id="nav-capacity">Capacity</button>
-      <button class="tab-btn" data-tab="survive" id="nav-survive">Survive</button>
-      <button class="tab-btn" data-tab="help" id="nav-help">Help</button>
-    </nav>
-  </div>
-</header>
-
-<main class="main-container">
-
-<!-- ═══════════════ ENCODE TAB ═══════════════ -->
-<section class="tab-panel active" id="tab-encode">
-  <div class="panel-header">
-    <h1>Hide a Secret Payload</h1>
-    <p class="panel-subtitle">
-      Embed any file inside another file — an image, audio, or document —
-      encrypted with AES-256-GCM so only someone with the key can extract it.
-    </p>
+  <div id="ambient-mesh"></div>
+  <!-- Local processing notice -->
+  <div id="local-notice">
+    🔒 All files are processed <strong>locally</strong> on your machine. Nothing is uploaded to any server.
   </div>
 
-  <div class="explainer-card">
-    <div class="explainer-icon">💡</div>
-    <div>
-      <strong>How does this work?</strong>
-      <p>StegoForge takes your secret file (the "payload") and hides it inside a normal-looking carrier file
-      (like a photo). The carrier looks unchanged to any viewer. Only someone who knows the password and uses
-      StegoForge can extract the hidden content.</p>
-    </div>
-  </div>
-
-  <form id="encode-form" class="stego-form">
-    <!-- Carrier -->
-    <div class="form-group">
-      <label class="form-label" for="enc-carrier">
-        Carrier File
-        <span class="label-hint">The file that will contain the hidden data</span>
-      </label>
-      <div class="drop-zone" id="enc-carrier-drop">
-        <span class="drop-icon">🖼</span>
-        <span class="drop-text">Drop a PNG, JPG, BMP, MP4, WEBM, WAV, FLAC, MP3, PDF, DOCX, TXT<br>or <u>click to browse</u></span>
-        <input type="file" id="enc-carrier" name="carrier" accept=".png,.jpg,.jpeg,.bmp,.gif,.webp,.mp4,.webm,.wav,.flac,.mp3,.ogg,.pdf,.docx,.xlsx,.txt" class="file-input">
+  <!-- Header -->
+  <header class="site-header">
+    <div class="header-inner">
+      <div class="logo-area">
+        <div class="logo-icon">⚒</div>
+        <div>
+          <div class="logo-text">StegoForge</div>
+          <div class="logo-tagline">Steganography Toolkit</div>
+        </div>
       </div>
-      <div class="file-info" id="enc-carrier-info"></div>
+      <nav class="tab-nav">
+        <button class="tab-btn active" data-tab="encode" id="nav-encode">Encode</button>
+        <button class="tab-btn" data-tab="decode" id="nav-decode">Decode</button>
+        <button class="tab-btn" data-tab="detect" id="nav-detect">Detect</button>
+        <button class="tab-btn ctf-btn" data-tab="ctf" id="nav-ctf">⚡ CTF Mode</button>
+        <button class="tab-btn" data-tab="capacity" id="nav-capacity">Capacity</button>
+        <button class="tab-btn" data-tab="diff" id="nav-diff">Diff Heatmap</button>
+        <button class="tab-btn" data-tab="survive" id="nav-survive">Survive</button>
+        <button class="tab-btn" data-tab="help" id="nav-help">Help</button>
+      </nav>
+      <button id="mobile-nav-toggle" class="btn-icon" aria-expanded="false" aria-label="Toggle navigation"
+        style="display:none;font-size:1.3rem;padding:6px 10px;border-radius:8px">☰</button>
     </div>
+  </header>
 
-    <!-- Payload -->
-    <div class="form-group">
-      <label class="form-label" for="enc-payload">
-        Payload File
-        <span class="label-hint">The secret file you want to hide — any format</span>
-      </label>
-      <div class="drop-zone" id="enc-payload-drop">
-        <span class="drop-icon">🔏</span>
-        <span class="drop-text">Drop any file — text, image, document, binary<br>or <u>click to browse</u></span>
-        <input type="file" id="enc-payload" name="payload" class="file-input">
+  <main class="main-container">
+
+    <!-- ═══════════════ ENCODE TAB ═══════════════ -->
+    <section class="tab-panel active" id="tab-encode">
+      <div class="panel-header">
+        <h1>Hide a Secret Payload</h1>
+        <p class="panel-subtitle">
+          Embed any file inside another file — an image, audio, or document —
+          encrypted with AES-256-GCM so only someone with the key can extract it.
+        </p>
       </div>
-      <div class="file-info" id="enc-payload-info"></div>
-    </div>
 
-    <!-- Key -->
-    <div class="form-group">
-      <label class="form-label" for="enc-key">
-        Encryption Key
-        <span class="label-hint">A passphrase only you know — required to retrieve the payload</span>
-      </label>
-      <div class="input-group">
-        <input type="password" id="enc-key" name="key" class="form-input" placeholder="Enter a strong passphrase…" autocomplete="new-password">
-        <button type="button" class="btn-icon" id="enc-key-toggle" title="Show/hide password">👁</button>
+      <div class="explainer-card">
+        <div class="explainer-icon">💡</div>
+        <div>
+          <strong>How does this work?</strong>
+          <p>StegoForge takes your secret file (the "payload") and hides it inside a normal-looking carrier file
+            (like a photo). The carrier looks unchanged to any viewer. Only someone who knows the password and uses
+            StegoForge can extract the hidden content.</p>
+        </div>
       </div>
-      <div class="input-tip">💡 Note: StegoForge automatically hardens your passphrase using the Argon2id key derivation function. Just ensure you choose a strong base password!</div>
-    </div>
 
-    <!-- Method Pills -->
-    <div class="form-group">
-      <label class="form-label">
-        Encoding Method
-        <span class="label-hint">Grouped by carrier family with hybrid methods up front</span>
-      </label>
-      <input type="hidden" id="enc-method" name="method" value="">
-      <div class="method-groups" id="enc-method-pills">
-        <div class="method-group">
-          <div class="method-group-title">Auto + Hybrid</div>
-          <div class="method-pills">
-            <button type="button" class="method-pill selected" data-method="" data-desc="Auto-select based on carrier type and stealth defaults." data-rating="Balanced">AUTO</button>
-            <button type="button" class="method-pill" data-method="adaptive-lsb" data-desc="Adaptive content-aware embedding; strongest against chi-square and RS." data-rating="High">ADAPTIVE-LSB <span class="method-pill-badge">HYBRID</span></button>
-            <button type="button" class="method-pill" data-method="fingerprint-lsb" data-desc="PRNU-aware embedding for camera-origin images." data-rating="High">FINGERPRINT-LSB <span class="method-pill-badge">HYBRID</span></button>
-            <button type="button" class="method-pill" data-method="video-motion" data-desc="Texture + temporal-cost ranked video motion embedding." data-rating="High">VIDEO-MOTION <span class="method-pill-badge">HYBRID</span></button>
-            <button type="button" class="method-pill" data-method="linguistic" data-desc="Natural-language synonym channel with context-preserving substitutions." data-rating="High">LINGUISTIC <span class="method-pill-badge">HYBRID</span></button>
+      <form id="encode-form" class="stego-form">
+        <!-- Carrier -->
+        <div class="form-group">
+          <label class="form-label" for="enc-carrier">
+            Carrier File
+            <span class="label-hint">The file that will contain the hidden data</span>
+          </label>
+          <div class="drop-zone" id="enc-carrier-drop">
+            <span class="drop-icon">🖼</span>
+            <span class="drop-text">Drop a PNG, JPG, BMP, MP4, WEBM, WAV, FLAC, MP3, PDF, DOCX, TXT<br>or <u>click to
+                browse</u></span>
+            <input type="file" id="enc-carrier" name="carrier"
+              accept=".png,.jpg,.jpeg,.bmp,.gif,.webp,.mp4,.webm,.wav,.flac,.mp3,.ogg,.pdf,.docx,.xlsx,.txt,.exe,.dll,.elf,.bin"
+              class="file-input">
+          </div>
+          <div class="file-info" id="enc-carrier-info"></div>
+          <div id="enc-carrier-preview" style="display:none"></div>
+        </div>
+
+        <!-- Payload -->
+        <div class="form-group">
+          <label class="form-label" for="enc-payload">
+            Payload File
+            <span class="label-hint">The secret file you want to hide — any format</span>
+          </label>
+          <div class="drop-zone" id="enc-payload-drop">
+            <span class="drop-icon">🔏</span>
+            <span class="drop-text">Drop any file — text, image, document, binary<br>or <u>click to browse</u></span>
+            <input type="file" id="enc-payload" name="payload" class="file-input">
+          </div>
+          <div class="file-info" id="enc-payload-info"></div>
+        </div>
+
+        <!-- Key -->
+        <div class="form-group">
+          <label class="form-label" for="enc-key">
+            Encryption Key
+            <span class="label-hint">A passphrase used to securely lock the payload (optional)</span>
+          </label>
+          <div class="input-group">
+            <input type="password" id="enc-key" name="key" class="form-input" placeholder="Enter a strong passphrase…"
+              autocomplete="new-password">
+            <button type="button" class="btn-icon" id="enc-key-toggle" title="Show/hide password">👁</button>
+          </div>
+          <div id="enc-key-strength"></div>
+          <div class="input-tip">💡 Note: StegoForge automatically hardens your passphrase using the Argon2id key
+            derivation function. Just ensure you choose a strong base password!</div>
+        </div>
+
+        <!-- Method Pills -->
+        <div class="form-group">
+          <label class="form-label">
+            Encoding Method
+            <span class="label-hint">Grouped by carrier family with hybrid methods up front</span>
+          </label>
+          <input type="hidden" id="enc-method" name="method" value="">
+          <div class="method-groups" id="enc-method-pills">
+            <div class="method-group">
+              <div class="method-group-title">Auto + Hybrid</div>
+              <div class="method-pills">
+                <button type="button" class="method-pill selected" data-method=""
+                  data-desc="Auto-select based on carrier type and stealth defaults."
+                  data-rating="Balanced">AUTO</button>
+                <button type="button" class="method-pill" data-method="adaptive-lsb"
+                  data-desc="Adaptive content-aware embedding; strongest against chi-square and RS."
+                  data-rating="High">ADAPTIVE-LSB <span class="method-pill-badge">HYBRID</span></button>
+                <button type="button" class="method-pill" data-method="fingerprint-lsb"
+                  data-desc="PRNU-aware embedding for camera-origin images." data-rating="High">FINGERPRINT-LSB <span
+                    class="method-pill-badge">HYBRID</span></button>
+                <button type="button" class="method-pill" data-method="video-motion"
+                  data-desc="Texture + temporal-cost ranked video motion embedding." data-rating="High">VIDEO-MOTION
+                  <span class="method-pill-badge">HYBRID</span></button>
+                <button type="button" class="method-pill" data-method="linguistic"
+                  data-desc="Natural-language synonym channel with context-preserving substitutions."
+                  data-rating="High">LINGUISTIC <span class="method-pill-badge">HYBRID</span></button>
+              </div>
+            </div>
+            <div class="method-group">
+              <div class="method-group-title">Image</div>
+              <div class="method-pills">
+                <button type="button" class="method-pill" data-method="lsb" data-desc="Classic pixel LSB on PNG/BMP."
+                  data-rating="Low">LSB</button>
+                <button type="button" class="method-pill" data-method="dct" data-desc="JPEG frequency-domain embedding."
+                  data-rating="Medium">DCT</button>
+                <button type="button" class="method-pill" data-method="alpha"
+                  data-desc="Transparency-channel embedding for PNG/WebP." data-rating="Medium">ALPHA</button>
+                <button type="button" class="method-pill" data-method="palette"
+                  data-desc="Palette-index order embedding for GIF/indexed PNG." data-rating="Medium">PALETTE</button>
+              </div>
+            </div>
+            <div class="method-group">
+              <div class="method-group-title">Video</div>
+              <div class="method-pills">
+                <button type="button" class="method-pill" data-method="video-dct"
+                  data-desc="Keyframe-focused block-domain embedding." data-rating="Medium">VIDEO-DCT</button>
+              </div>
+            </div>
+            <div class="method-group">
+              <div class="method-group-title">Audio</div>
+              <div class="method-pills">
+                <button type="button" class="method-pill" data-method="audio-lsb"
+                  data-desc="Cost-ranked PCM sample LSB embedding." data-rating="Medium">AUDIO-LSB</button>
+                <button type="button" class="method-pill" data-method="phase"
+                  data-desc="Segment phase coding for compressed-audio robustness." data-rating="Medium">PHASE</button>
+                <button type="button" class="method-pill" data-method="spectrogram"
+                  data-desc="Spectral-domain audio embedding." data-rating="Medium">SPECTROGRAM</button>
+              </div>
+            </div>
+            <div class="method-group">
+              <div class="method-group-title">Document</div>
+              <div class="method-pills">
+                <button type="button" class="method-pill" data-method="unicode"
+                  data-desc="Adaptive zero-width unicode insertion in text." data-rating="Medium">UNICODE</button>
+                <button type="button" class="method-pill" data-method="pdf" data-desc="PDF metadata/stream embedding."
+                  data-rating="Medium">PDF</button>
+                <button type="button" class="method-pill" data-method="docx" data-rating="Fair"
+                  data-desc="Injects data into DOCX structural whitespace.">DOCX</button>
+                <button type="button" class="method-pill" data-method="xlsx" data-rating="Fair"
+                  data-desc="Injects data into XLSX structural whitespace.">XLSX</button>
+              </div>
+            </div>
+            <div class="method-group">
+              <div class="method-group-title">Binary</div>
+              <div class="method-pills">
+                <button type="button" class="method-pill" data-method="pe" data-rating="High"
+                  data-desc="Injects payload into Windows executables (PE/EXE/DLL) slack space without breaking the binary.">PE
+                  / EXE</button>
+                <button type="button" class="method-pill" data-method="elf" data-rating="High"
+                  data-desc="Injects payload into Linux executables (ELF) slack space without corrupting execution.">ELF</button>
+              </div>
+            </div>
+          </div>
+          <div class="method-description" id="method-desc">Auto mode picks a carrier-aware default. Hybrid methods
+            prioritize stealth over raw capacity.</div>
+        </div>
+
+        <!-- Live Capacity Matrix -->
+        <div class="form-group">
+          <label class="form-label">Live Capacity Matrix</label>
+          <div id="enc-capacity-matrix" class="capacity-matrix empty">Drop carrier and payload to compute per-method
+            usage.</div>
+        </div>
+
+        <!-- Platform Survivability -->
+        <div class="form-group collapsible-section">
+          <button type="button" class="collapse-toggle" id="platform-toggle">
+            🌐 Platform Survivability (Auto method + wet paper)
+            <span class="collapse-arrow">▶</span>
+          </button>
+          <div class="collapse-content" id="platform-content" style="display:none">
+            <input type="hidden" id="enc-target" name="target" value="">
+            <input type="hidden" id="enc-wet-paper" name="wet_paper" value="0">
+            <input type="hidden" id="enc-test-survival" name="test_survival" value="0">
+            <div class="platform-pills" id="platform-pills"></div>
+            <div class="method-description" id="platform-note"></div>
+            <label class="checkbox-row"><input type="checkbox" id="enc-test-survival-check"> Run local survival
+              simulation after encode</label>
           </div>
         </div>
-        <div class="method-group">
-          <div class="method-group-title">Image</div>
-          <div class="method-pills">
-            <button type="button" class="method-pill" data-method="lsb" data-desc="Classic pixel LSB on PNG/BMP." data-rating="Low">LSB</button>
-            <button type="button" class="method-pill" data-method="dct" data-desc="JPEG frequency-domain embedding." data-rating="Medium">DCT</button>
-            <button type="button" class="method-pill" data-method="alpha" data-desc="Transparency-channel embedding for PNG/WebP." data-rating="Medium">ALPHA</button>
-            <button type="button" class="method-pill" data-method="palette" data-desc="Palette-index order embedding for GIF/indexed PNG." data-rating="Medium">PALETTE</button>
+
+        <!-- Bit Depth -->
+        <div class="form-group">
+          <label class="form-label" for="enc-depth">
+            Bit Depth: <span id="depth-display">1</span>
+            <span class="label-hint">Higher = more capacity, slightly less invisible</span>
+          </label>
+          <div class="slider-row">
+            <span class="slider-label">Invisible</span>
+            <input type="range" id="enc-depth" name="depth" min="1" max="4" value="1" class="form-slider">
+            <span class="slider-label">Max capacity</span>
+          </div>
+          <div class="depth-info">
+            <span id="depth-info-text">At depth 1: ~1 bit per pixel channel — completely invisible.</span>
           </div>
         </div>
-        <div class="method-group">
-          <div class="method-group-title">Video</div>
-          <div class="method-pills">
-            <button type="button" class="method-pill" data-method="video-dct" data-desc="Keyframe-focused block-domain embedding." data-rating="Medium">VIDEO-DCT</button>
+
+        <!-- Decoy Mode -->
+        <div class="form-group collapsible-section">
+          <button type="button" class="collapse-toggle" id="decoy-toggle">
+            🪤 Decoy Mode (Advanced) <span class="collapse-arrow">▶</span>
+          </button>
+          <div class="collapse-content" id="decoy-content" style="display:none">
+            <div class="explainer-card explainer-warn">
+              <div class="explainer-icon">🪤</div>
+              <div>
+                <strong>What is Decoy Mode?</strong>
+                <p>Decoy mode hides <em>two</em> payloads in the same carrier — a fake "decoy" and your real secret.
+                  Under pressure, you can reveal the decoy key, which returns innocent content. Only you know
+                  the real key that unlocks the actual payload. This is called plausible deniability.</p>
+              </div>
+            </div>
+            <label class="form-label">Decoy Payload File</label>
+            <div class="drop-zone" id="enc-decoy-drop">
+              <span class="drop-icon">🎭</span>
+              <span class="drop-text">Drop a decoy file (innocent content)<br>or <u>click to browse</u></span>
+              <input type="file" id="enc-decoy" name="decoy" class="file-input">
+            </div>
+            <div class="file-info" id="enc-decoy-info"></div>
+            <label class="form-label" for="enc-decoy-key" style="margin-top:1rem">
+              Decoy Key
+              <span class="label-hint">The key you'd reveal under duress</span>
+            </label>
+            <input type="password" id="enc-decoy-key" name="decoy_key" class="form-input"
+              placeholder="Decoy passphrase…">
           </div>
         </div>
-        <div class="method-group">
-          <div class="method-group-title">Audio</div>
-          <div class="method-pills">
-            <button type="button" class="method-pill" data-method="audio-lsb" data-desc="Cost-ranked PCM sample LSB embedding." data-rating="Medium">AUDIO-LSB</button>
-            <button type="button" class="method-pill" data-method="phase" data-desc="Segment phase coding for compressed-audio robustness." data-rating="Medium">PHASE</button>
-            <button type="button" class="method-pill" data-method="spectrogram" data-desc="Spectral-domain audio embedding." data-rating="Medium">SPECTROGRAM</button>
+
+        <button type="submit" class="btn btn-primary btn-large" id="enc-submit">
+          <span class="btn-icon-left">⚒</span> Forge — Embed Payload
+        </button>
+      </form>
+
+      <div id="encode-result" class="result-area" style="display:none"></div>
+    </section>
+
+
+    <!-- ═══════════════ DECODE TAB ═══════════════ -->
+    <section class="tab-panel" id="tab-decode">
+      <div class="panel-header">
+        <h1>Extract a Hidden Payload</h1>
+        <p class="panel-subtitle">
+          Provide the stego file (the modified carrier) and the correct passphrase to reveal the hidden content.
+        </p>
+      </div>
+
+      <div class="explainer-card">
+        <div class="explainer-icon">🔓</div>
+        <div>
+          <strong>What do I need?</strong>
+          <p>You need the stego file — the carrier file that was produced by the Encode step — and the exact passphrase
+            used during encoding. Without the key, decryption produces nothing (not garbage — literally nothing).
+            This is by design: AES-256-GCM with Argon2 key derivation.</p>
+        </div>
+      </div>
+
+      <form id="decode-form" class="stego-form">
+        <div class="form-group">
+          <label class="form-label" for="dec-file">
+            Stego File
+            <span class="label-hint">The carrier file that contains the hidden payload</span>
+          </label>
+          <div class="drop-zone" id="dec-file-drop">
+            <span class="drop-icon">🔍</span>
+            <span class="drop-text">Drop the stego file here<br>or <u>click to browse</u></span>
+            <input type="file" id="dec-file" name="file"
+              accept=".png,.jpg,.jpeg,.bmp,.gif,.webp,.mp4,.webm,.wav,.flac,.mp3,.ogg,.pdf,.docx,.xlsx,.txt,.exe,.dll,.elf,.bin,.sfrg"
+              class="file-input">
+          </div>
+          <div class="file-info" id="dec-file-info"></div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="dec-key">
+            Decryption Key
+            <span class="label-hint">The passphrase used when the payload was embedded (optional)</span>
+          </label>
+          <div class="input-group">
+            <input type="password" id="dec-key" name="key" class="form-input" placeholder="Enter the passphrase…">
+            <button type="button" class="btn-icon" id="dec-key-toggle" title="Show/hide">👁</button>
           </div>
         </div>
-        <div class="method-group">
-          <div class="method-group-title">Document</div>
-          <div class="method-pills">
-            <button type="button" class="method-pill" data-method="unicode" data-desc="Adaptive zero-width unicode insertion in text." data-rating="Medium">UNICODE</button>
-            <button type="button" class="method-pill" data-method="pdf" data-desc="PDF metadata/stream embedding." data-rating="Medium">PDF</button>
-            <button type="button" class="method-pill" data-method="docx" data-desc="Office XML stream embedding for DOCX." data-rating="Medium">DOCX</button>
-            <button type="button" class="method-pill" data-method="xlsx" data-desc="Office XML stream embedding for XLSX." data-rating="Medium">XLSX</button>
+
+        <div class="form-group">
+          <label class="form-label" for="dec-method">
+            Method <span class="label-hint">Auto-detected — change only if you know the original method</span>
+          </label>
+          <select id="dec-method" name="method" class="form-select">
+            <option value="">Auto-detect</option>
+            <optgroup label="Hybrid">
+              <option value="adaptive-lsb">Adaptive LSB</option>
+              <option value="fingerprint-lsb">Fingerprint LSB</option>
+              <option value="video-motion">Video Motion</option>
+              <option value="linguistic">Linguistic</option>
+            </optgroup>
+            <optgroup label="Image">
+              <option value="lsb">LSB</option>
+              <option value="dct">DCT (JPEG)</option>
+              <option value="alpha">Alpha Channel</option>
+              <option value="palette">Palette</option>
+            </optgroup>
+            <optgroup label="Video">
+              <option value="video-dct">Video DCT</option>
+            </optgroup>
+            <optgroup label="Audio">
+              <option value="audio-lsb">Audio LSB</option>
+              <option value="phase">Phase</option>
+              <option value="spectrogram">Spectrogram</option>
+            </optgroup>
+            <optgroup label="Document">
+              <option value="unicode">Unicode</option>
+              <option value="pdf">PDF</option>
+              <option value="docx">DOCX</option>
+              <option value="xlsx">XLSX</option>
+            </optgroup>
+            <optgroup label="Binary">
+              <option value="pe">Windows PE/EXE/DLL</option>
+              <option value="elf">Linux ELF</option>
+            </optgroup>
+            <optgroup label="Misc">
+              <option value="sfrg">StegoForge Blob (.sfrg)</option>
+            </optgroup>
+          </select>
+        </div>
+
+        <button type="submit" class="btn btn-primary btn-large" id="dec-submit">
+          <span class="btn-icon-left">🔓</span> Extract &amp; Decrypt
+        </button>
+      </form>
+
+      <div id="decode-result" class="result-area" style="display:none"></div>
+    </section>
+
+
+    <!-- ═══════════════ DETECT TAB ═══════════════ -->
+    <section class="tab-panel" id="tab-detect">
+      <div class="panel-header">
+        <h1>Detect Hidden Content</h1>
+        <p class="panel-subtitle">
+          Analyze a suspicious file for signs of steganography using multiple statistical and forensic methods.
+        </p>
+      </div>
+
+      <div class="explainer-card">
+        <div class="explainer-icon">🔬</div>
+        <div>
+          <strong>Seven detection engines:</strong>
+          <ul class="explainer-list">
+            <li><strong>Chi-Square:</strong> Detects LSB manipulation by analyzing pixel value distribution — natural
+              images don't have equal pairs, hidden data does.</li>
+            <li><strong>RS Analysis:</strong> Estimates what percentage of pixels carry hidden data without needing the
+              key.</li>
+            <li><strong>EXIF/Metadata:</strong> Scans all metadata fields, comments, thumbnails, and custom keys for
+              forensic anomalies.</li>
+            <li><strong>Blind Extractor:</strong> Tries all common encoding parameters (channels, depths, orders) and
+              scores what it finds.</li>
+            <li><strong>ML Steganalysis:</strong> Uses ONNX neural networks to identify deep adaptive steganography that
+              defeats traditional statistical attacks.</li>
+            <li><strong>Camera Fingerprint:</strong> Analyzes the PRNU (sensor noise) of real photos; steganography
+              irreparably disrupts this unique fingerprint.</li>
+            <li><strong>Binary Analysis:</strong> Checks software binaries (PE/ELF/etc) for structural slack space, EOF
+              attachments, and unnatural entropy spikes.</li>
+          </ul>
+        </div>
+      </div>
+
+      <form id="detect-form" class="stego-form">
+        <div class="form-group">
+          <label class="form-label" for="det-file">Suspicious File</label>
+          <div class="drop-zone" id="det-file-drop">
+            <span class="drop-icon">🕵️</span>
+            <span class="drop-text">Drop any file to analyze<br>or <u>click to browse</u></span>
+            <input type="file" id="det-file" name="file" class="file-input">
+          </div>
+          <div class="file-info" id="det-file-info"></div>
+        </div>
+
+        <div class="detector-toggles">
+          <label class="checkbox-row"><input type="checkbox" name="chi2" checked> Chi-Square</label>
+          <label class="checkbox-row"><input type="checkbox" name="rs" checked> RS Analysis</label>
+          <label class="checkbox-row"><input type="checkbox" name="exif" checked> EXIF</label>
+          <label class="checkbox-row"><input type="checkbox" name="blind" checked> Blind</label>
+          <label class="checkbox-row"><input type="checkbox" name="ml" checked> ML</label>
+          <label class="checkbox-row"><input type="checkbox" name="fingerprint" checked> Fingerprint</label>
+          <label class="checkbox-row"><input type="checkbox" name="binary" checked> Binary</label>
+        </div>
+
+        <button type="submit" class="btn btn-secondary btn-large" id="det-submit">
+          <span class="btn-icon-left">🔬</span> Run All Detectors
+        </button>
+      </form>
+
+      <div id="detect-result" class="result-area" style="display:none"></div>
+    </section>
+
+
+    <!-- ═══════════════ CTF TAB ═══════════════ -->
+    <section class="tab-panel" id="tab-ctf">
+      <div class="panel-header">
+        <h1>⚡ CTF Mode — Full Forensic Report</h1>
+        <p class="panel-subtitle">
+          Upload a challenge file and get a comprehensive forensic report — every detector, every finding,
+          extracted payloads if found. Built for CTF competitions and digital forensics.
+        </p>
+      </div>
+
+      <div class="explainer-card explainer-ctf">
+        <div class="explainer-icon">🏆</div>
+        <div>
+          <strong>Made for CTF challenges</strong>
+          <p>CTF Mode runs every detection engine simultaneously and produces a forensic report ranked by
+            confidence. If the blind extractor finds something, it's automatically downloaded.
+            Use this first when you have an unknown challenge file — it takes seconds.</p>
+        </div>
+      </div>
+
+      <form id="ctf-form" class="stego-form">
+        <div class="form-group">
+          <label class="form-label" for="ctf-file">Challenge File</label>
+          <div class="drop-zone ctf-drop" id="ctf-file-drop">
+            <span class="drop-icon">🚩</span>
+            <span class="drop-text">Drop the CTF challenge file<br>or <u>click to browse</u></span>
+            <input type="file" id="ctf-file" name="file" class="file-input">
+          </div>
+          <div class="file-info" id="ctf-file-info"></div>
+        </div>
+
+        <button type="submit" class="btn btn-ctf btn-large" id="ctf-submit">
+          <span class="btn-icon-left">⚡</span> Analyze Challenge
+        </button>
+      </form>
+
+      <div class="ctf-actions">
+        <button type="button" class="btn btn-secondary" id="ctf-copy-report">Copy Report</button>
+        <button type="button" class="btn btn-secondary" id="ctf-export-json">Export JSON</button>
+      </div>
+
+      <div id="ctf-result" class="result-area" style="display:none"></div>
+    </section>
+
+
+    <!-- ═══════════════ SURVIVE TAB ═══════════════ -->
+    <section class="tab-panel" id="tab-survive">
+      <div class="panel-header">
+        <h1>Platform Survival Check</h1>
+        <p class="panel-subtitle">
+          Simulate social platform recompression locally and verify extraction resilience.
+        </p>
+      </div>
+
+      <form id="survive-form" class="stego-form">
+        <div class="form-group">
+          <label class="form-label" for="survive-carrier">Carrier File</label>
+          <div class="drop-zone" id="survive-carrier-drop">
+            <span class="drop-icon">🖼</span>
+            <span class="drop-text">Drop carrier image or video<br>or <u>click to browse</u></span>
+            <input type="file" id="survive-carrier" name="carrier" accept=".png,.jpg,.jpeg,.bmp,.gif,.webp,.mp4,.webm"
+              class="file-input">
+          </div>
+          <div class="file-info" id="survive-carrier-info"></div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="survive-payload">Payload File</label>
+          <div class="drop-zone" id="survive-payload-drop">
+            <span class="drop-icon">🔏</span>
+            <span class="drop-text">Drop payload file<br>or <u>click to browse</u></span>
+            <input type="file" id="survive-payload" name="payload" class="file-input">
+          </div>
+          <div class="file-info" id="survive-payload-info"></div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="survive-key">Encryption Key</label>
+          <input type="password" id="survive-key" name="key" class="form-input" placeholder="Passphrase">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="survive-target">Target Platform</label>
+          <select id="survive-target" name="target" class="form-select">
+            <option value="twitter">Twitter</option>
+            <option value="instagram">Instagram</option>
+            <option value="telegram">Telegram</option>
+            <option value="discord">Discord</option>
+            <option value="whatsapp">WhatsApp</option>
+            <option value="facebook">Facebook</option>
+            <option value="tiktok">TikTok</option>
+            <option value="linkedin">LinkedIn</option>
+            <option value="reddit">Reddit</option>
+            <option value="signal">Signal</option>
+          </select>
+        </div>
+
+        <button type="submit" class="btn btn-secondary btn-large" id="survive-submit">
+          <span class="btn-icon-left">🧪</span> Run Simulation
+        </button>
+      </form>
+
+      <div id="survive-result" class="result-area" style="display:none"></div>
+    </section>
+
+
+    <!-- ═══════════════ CAPACITY TAB ═══════════════ -->
+    <section class="tab-panel" id="tab-capacity">
+      <div class="panel-header">
+        <h1>Capacity Check</h1>
+        <p class="panel-subtitle">
+          Find out how much secret data a carrier file can hold before you start encoding.
+        </p>
+      </div>
+
+      <div class="explainer-card">
+        <div class="explainer-icon">📏</div>
+        <div>
+          <strong>Why check capacity first?</strong>
+          <p>Each carrier has a maximum payload size depending on its dimensions, bit depth, and encoding method.
+            A 512×512 PNG at depth=1 can hold about 96 KB. A 3-second WAV file can hold about 33 KB.
+            If your payload (after encryption) exceeds this, encoding will fail — check capacity first.</p>
+        </div>
+      </div>
+
+      <form id="capacity-form" class="stego-form">
+        <div class="form-group">
+          <label class="form-label" for="cap-file">Carrier File</label>
+          <div class="drop-zone" id="cap-file-drop">
+            <span class="drop-icon">📐</span>
+            <span class="drop-text">Drop carrier file here<br>or <u>click to browse</u></span>
+            <input type="file" id="cap-file" name="file"
+              accept=".png,.jpg,.jpeg,.bmp,.gif,.webp,.mp4,.webm,.wav,.flac,.mp3,.ogg,.pdf,.docx,.xlsx,.txt,.exe,.dll,.elf,.bin"
+              class="file-input">
+          </div>
+          <div class="file-info" id="cap-file-info"></div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="cap-payload">Optional Payload File</label>
+          <div class="drop-zone" id="cap-payload-drop">
+            <span class="drop-icon">📦</span>
+            <span class="drop-text">Drop payload to calculate utilization percentages<br>or <u>click to
+                browse</u></span>
+            <input type="file" id="cap-payload" name="payload" class="file-input">
+          </div>
+          <div class="file-info" id="cap-payload-info"></div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group half">
+            <label class="form-label" for="cap-method">Method</label>
+            <select id="cap-method" name="method" class="form-select">
+              <option value="">Auto-detect</option>
+              <option value="lsb">LSB</option>
+              <option value="adaptive-lsb">Adaptive LSB</option>
+              <option value="dct">DCT</option>
+              <option value="video-dct">Video DCT</option>
+              <option value="video-motion">Video Motion</option>
+              <option value="fingerprint-lsb">Fingerprint LSB</option>
+              <option value="alpha">Alpha</option>
+              <option value="palette">Palette</option>
+              <option value="audio-lsb">Audio LSB</option>
+              <option value="phase">Phase</option>
+              <option value="unicode">Unicode</option>
+              <option value="linguistic">Linguistic</option>
+              <option value="pdf">PDF</option>
+              <option value="docx">DOCX</option>
+              <option value="xlsx">XLSX</option>
+              <option value="pe">PE/EXE</option>
+              <option value="elf">ELF</option>
+            </select>
+          </div>
+          <div class="form-group half">
+            <label class="form-label" for="cap-depth">Bit Depth: <span id="cap-depth-display">1</span></label>
+            <input type="range" id="cap-depth" name="depth" min="1" max="4" value="1" class="form-slider">
           </div>
         </div>
-      </div>
-      <div class="method-description" id="method-desc">Auto mode picks a carrier-aware default. Hybrid methods prioritize stealth over raw capacity.</div>
-    </div>
 
-    <!-- Live Capacity Matrix -->
-    <div class="form-group">
-      <label class="form-label">Live Capacity Matrix</label>
-      <div id="enc-capacity-matrix" class="capacity-matrix empty">Drop carrier and payload to compute per-method usage.</div>
-    </div>
+        <button type="submit" class="btn btn-secondary btn-large" id="cap-submit">
+          <span class="btn-icon-left">📏</span> Check Capacity
+        </button>
+      </form>
 
-    <!-- Platform Survivability -->
-    <div class="form-group collapsible-section">
-      <button type="button" class="collapse-toggle" id="platform-toggle">
-        🌐 Platform Survivability (Auto method + wet paper)
-        <span class="collapse-arrow">▶</span>
-      </button>
-      <div class="collapse-content" id="platform-content" style="display:none">
-        <input type="hidden" id="enc-target" name="target" value="">
-        <input type="hidden" id="enc-wet-paper" name="wet_paper" value="0">
-        <input type="hidden" id="enc-test-survival" name="test_survival" value="0">
-        <div class="platform-pills" id="platform-pills"></div>
-        <div class="method-description" id="platform-note"></div>
-        <label class="checkbox-row"><input type="checkbox" id="enc-test-survival-check"> Run local survival simulation after encode</label>
+      <div class="form-group" style="margin-top:12px;">
+        <label class="form-label">Live Method Capacity Table</label>
+        <div id="cap-live-matrix" class="capacity-matrix empty">Drop a carrier to compute capacities across methods.
+        </div>
       </div>
-    </div>
 
-    <!-- Bit Depth -->
-    <div class="form-group">
-      <label class="form-label" for="enc-depth">
-        Bit Depth: <span id="depth-display">1</span>
-        <span class="label-hint">Higher = more capacity, slightly less invisible</span>
-      </label>
-      <div class="slider-row">
-        <span class="slider-label">Invisible</span>
-        <input type="range" id="enc-depth" name="depth" min="1" max="4" value="1" class="form-slider">
-        <span class="slider-label">Max capacity</span>
-      </div>
-      <div class="depth-info">
-        <span id="depth-info-text">At depth 1: ~1 bit per pixel channel — completely invisible.</span>
-      </div>
-    </div>
+      <div id="capacity-result" class="result-area" style="display:none"></div>
+    </section>
 
-    <!-- Decoy Mode -->
-    <div class="form-group collapsible-section">
-      <button type="button" class="collapse-toggle" id="decoy-toggle">
-        🪤 Decoy Mode (Advanced) <span class="collapse-arrow">▶</span>
-      </button>
-      <div class="collapse-content" id="decoy-content" style="display:none">
-        <div class="explainer-card explainer-warn">
-          <div class="explainer-icon">🪤</div>
-          <div>
-            <strong>What is Decoy Mode?</strong>
-            <p>Decoy mode hides <em>two</em> payloads in the same carrier — a fake "decoy" and your real secret.
-            Under pressure, you can reveal the decoy key, which returns innocent content. Only you know
-            the real key that unlocks the actual payload. This is called plausible deniability.</p>
+
+    <!-- ═══════════════ DIFF TAB ═══════════════ -->
+    <section class="tab-panel" id="tab-diff">
+      <div class="panel-header">
+        <h1>Diff Heatmap Analysis</h1>
+        <p class="panel-subtitle">Compare an original carrier against the stego version to find visually embedded
+          modifications.</p>
+      </div>
+
+      <div class="explainer-card">
+        <div class="explainer-icon">🔍</div>
+        <div>
+          <strong>How Diff Works</strong>
+          <p>This tool performs a byte-by-byte and pixel-by-pixel comparison between the clean cover and the suspicious
+            stego file. If it's an image, an amplified heatmap is generated showing exactly which regions of the image
+            were modified by the steganography algorithm.</p>
+        </div>
+      </div>
+
+      <form id="diff-form" class="stego-form">
+        <div class="form-group half">
+          <label class="form-label" for="diff-cover">Original (Clean) Carrier</label>
+          <div class="drop-zone" id="diff-cover-drop">
+            <span class="drop-icon">🖼</span>
+            <span class="drop-text">Drop the clean file here<br>or <u>browse</u></span>
+            <input type="file" id="diff-cover" name="cover"
+              accept=".png,.jpg,.jpeg,.bmp,.gif,.webp,.wav,.mp3,.mp4,.txt,.pdf,.docx,.xlsx,.exe,.dll,.elf,.bin"
+              class="file-input">
           </div>
+          <div class="file-info" id="diff-cover-info"></div>
         </div>
-        <label class="form-label">Decoy Payload File</label>
-        <div class="drop-zone" id="enc-decoy-drop">
-          <span class="drop-icon">🎭</span>
-          <span class="drop-text">Drop a decoy file (innocent content)<br>or <u>click to browse</u></span>
-          <input type="file" id="enc-decoy" name="decoy" class="file-input">
+
+        <div class="form-group half">
+          <label class="form-label" for="diff-stego">Stego (Suspicious) Carrier</label>
+          <div class="drop-zone" id="diff-stego-drop">
+            <span class="drop-icon">🧐</span>
+            <span class="drop-text">Drop the stego file here<br>or <u>browse</u></span>
+            <input type="file" id="diff-stego" name="stego"
+              accept=".png,.jpg,.jpeg,.bmp,.gif,.webp,.wav,.mp3,.mp4,.txt,.pdf,.docx,.xlsx,.exe,.dll,.elf,.bin"
+              class="file-input">
+          </div>
+          <div class="file-info" id="diff-stego-info"></div>
         </div>
-        <div class="file-info" id="enc-decoy-info"></div>
-        <label class="form-label" for="enc-decoy-key" style="margin-top:1rem">
-          Decoy Key
-          <span class="label-hint">The key you'd reveal under duress</span>
-        </label>
-        <input type="password" id="enc-decoy-key" name="decoy_key" class="form-input" placeholder="Decoy passphrase…">
+
+        <button type="submit" class="btn btn-secondary btn-large" style="margin-top:10px" id="diff-submit">
+          <span class="btn-icon-left">🔮</span> Generate Heatmap
+        </button>
+      </form>
+
+      <div id="diff-result" class="result-area" style="display:none"></div>
+    </section>
+
+
+    <!-- ═══════════════ HELP TAB ═══════════════ -->
+    <section class="tab-panel" id="tab-help">
+      <div class="panel-header">
+        <h1>How to Use StegoForge</h1>
+        <p class="panel-subtitle">A beginner-friendly guide to steganography and every feature in this toolkit.</p>
       </div>
-    </div>
 
-    <button type="submit" class="btn btn-primary btn-large" id="enc-submit">
-      <span class="btn-icon-left">⚒</span> Forge — Embed Payload
-    </button>
-  </form>
+      <div class="help-grid">
 
-  <div id="encode-result" class="result-area" style="display:none"></div>
-</section>
+        <div class="help-card">
+          <div class="help-card-icon">🤔</div>
+          <h2>What is Steganography?</h2>
+          <p>Steganography is the practice of hiding secret information <em>inside</em> ordinary files —
+            unlike encryption, which makes data unreadable, steganography makes the data <em>undetectable</em>.
+            A photo with a hidden message looks exactly like a normal photo.</p>
+          <p>StegoForge combines steganography AND encryption: your payload is first encrypted (AES-256)
+            then embedded, so even if someone finds the hidden data, they can't read it without your key.</p>
+        </div>
 
+        <div class="help-card">
+          <div class="help-card-icon">🖼</div>
+          <h2>Image Methods</h2>
+          <ul>
+            <li><strong>LSB (Pixel):</strong> Changes the last 1–4 bits of each pixel's color value. A 255-blue pixel
+              becomes 254-blue — completely invisible. Best choice for PNG and BMP.</li>
+            <li><strong>DCT (JPEG):</strong> Embeds data in the math behind JPEG compression (frequency coefficients).
+              More resistant to statistical detection than LSB.</li>
+            <li><strong>Alpha Channel:</strong> Hides in the transparency value of PNG/WebP pixels. Changing alpha by
+              1/256 is invisible to any viewer.</li>
+            <li><strong>Palette:</strong> Reorders the color table of GIF/indexed PNG images to encode bits. Very low
+              capacity, but completely undetectable.</li>
+          </ul>
+        </div>
 
-<!-- ═══════════════ DECODE TAB ═══════════════ -->
-<section class="tab-panel" id="tab-decode">
-  <div class="panel-header">
-    <h1>Extract a Hidden Payload</h1>
-    <p class="panel-subtitle">
-      Provide the stego file (the modified carrier) and the correct passphrase to reveal the hidden content.
-    </p>
-  </div>
+        <div class="help-card">
+          <div class="help-card-icon">🎵</div>
+          <h2>Audio Methods</h2>
+          <ul>
+            <li><strong>Audio LSB:</strong> Modifies the last bit of each audio sample. At 16-bit audio, the distortion
+              is 1/65536 of the amplitude range — completely inaudible. Great for WAV/FLAC.</li>
+            <li><strong>Phase Coding:</strong> Encodes data as phase shifts in audio frequency segments. Survives MP3
+              compression better than LSB because phase is partially preserved.</li>
+            <li><strong>Spectrogram Art:</strong> The most impressive method — embeds a visible image or text in the
+              audio's frequency spectrum. Sounds normal but looks like art in Audacity.</li>
+          </ul>
+        </div>
 
-  <div class="explainer-card">
-    <div class="explainer-icon">🔓</div>
-    <div>
-      <strong>What do I need?</strong>
-      <p>You need the stego file — the carrier file that was produced by the Encode step — and the exact passphrase
-      used during encoding. Without the key, decryption produces nothing (not garbage — literally nothing).
-      This is by design: AES-256-GCM with Argon2 key derivation.</p>
-    </div>
-  </div>
+        <div class="help-card">
+          <div class="help-card-icon">📄</div>
+          <h2>Document Methods</h2>
+          <ul>
+            <li><strong>Unicode (TXT):</strong> Inserts invisible zero-width Unicode characters (U+200B, U+200C, U+200D)
+              between words. The text looks 100% identical — even copy-paste works.</li>
+            <li><strong>PDF Injection:</strong> Adds a hidden /StegoData key to the PDF's metadata stream. Invisible in
+              any PDF viewer, but StegoForge can extract it.</li>
+            <li><strong>DOCX/XLSX XML:</strong> Adds a custom XML file inside the document's ZIP archive. Word/Excel
+              open the document normally; the hidden file is invisible.</li>
+          </ul>
+        </div>
 
-  <form id="decode-form" class="stego-form">
-    <div class="form-group">
-      <label class="form-label" for="dec-file">
-        Stego File
-        <span class="label-hint">The carrier file that contains the hidden payload</span>
-      </label>
-      <div class="drop-zone" id="dec-file-drop">
-        <span class="drop-icon">🔍</span>
-        <span class="drop-text">Drop the stego file here<br>or <u>click to browse</u></span>
-        <input type="file" id="dec-file" name="file" accept=".png,.jpg,.jpeg,.bmp,.gif,.webp,.mp4,.webm,.wav,.flac,.mp3,.ogg,.pdf,.docx,.xlsx,.txt" class="file-input">
-      </div>
-      <div class="file-info" id="dec-file-info"></div>
-    </div>
+        <div class="help-card">
+          <div class="help-card-icon">🔐</div>
+          <h2>Encryption & Security</h2>
+          <ul>
+            <li><strong>AES-256-GCM:</strong> Military-grade authenticated encryption. Decrypting with the wrong key
+              returns nothing — not garbage, not an error, nothing.</li>
+            <li><strong>Argon2id KDF:</strong> Your passphrase is never used directly. It's hashed with Argon2id
+              (memory-hard, brute-force resistant) to derive the actual key.</li>
+            <li><strong>Decoy Mode:</strong> Stores two encrypted payloads. Under pressure, reveal the decoy key
+              (returns innocent content). The real key stays secret.</li>
+            <li><strong>Polymorphic Embed:</strong> Your key also determines the pixel traversal order and channel
+              selection, making signature-based detection much harder.</li>
+          </ul>
+        </div>
 
-    <div class="form-group">
-      <label class="form-label" for="dec-key">
-        Decryption Key
-        <span class="label-hint">The passphrase used when the payload was embedded</span>
-      </label>
-      <div class="input-group">
-        <input type="password" id="dec-key" name="key" class="form-input" placeholder="Enter the passphrase…">
-        <button type="button" class="btn-icon" id="dec-key-toggle" title="Show/hide">👁</button>
-      </div>
-    </div>
+        <div class="help-card">
+          <div class="help-card-icon">🕵️</div>
+          <h2>Advanced Forensics</h2>
+          <ul>
+            <li><strong>ML Analysis:</strong> Uses neural networks trained on Stego databases to detect probabilistic
+              payload noise.</li>
+            <li><strong>PRNU Fingerprint:</strong> Analyzes camera sensor noise. Traditional embedding damages this
+              fingerprint. StegoForge's Fingerprint method preserves it.</li>
+            <li><strong>Chi-Square & RS:</strong> Detects flat LSB embedding. "Adaptive LSB" dodges these successfully.
+            </li>
+            <li><strong>Blind Extractor:</strong> Brute-forces every parameter combination to attempt payload extraction
+              automatically during CTF mode.</li>
+          </ul>
+        </div>
 
-    <div class="form-group">
-      <label class="form-label" for="dec-method">
-        Method <span class="label-hint">Auto-detected — change only if you know the original method</span>
-      </label>
-      <select id="dec-method" name="method" class="form-select">
-        <option value="">Auto-detect</option>
-        <optgroup label="Hybrid">
-          <option value="adaptive-lsb">Adaptive LSB</option>
-          <option value="fingerprint-lsb">Fingerprint LSB</option>
-          <option value="video-motion">Video Motion</option>
-          <option value="linguistic">Linguistic</option>
-        </optgroup>
-        <optgroup label="Image">
-          <option value="lsb">LSB</option>
-          <option value="dct">DCT (JPEG)</option>
-          <option value="alpha">Alpha Channel</option>
-          <option value="palette">Palette</option>
-        </optgroup>
-        <optgroup label="Video">
-          <option value="video-dct">Video DCT</option>
-        </optgroup>
-        <optgroup label="Audio">
-          <option value="audio-lsb">Audio LSB</option>
-          <option value="phase">Phase</option>
-          <option value="spectrogram">Spectrogram</option>
-        </optgroup>
-        <optgroup label="Document">
-          <option value="unicode">Unicode</option>
-          <option value="pdf">PDF</option>
-          <option value="docx">DOCX</option>
-          <option value="xlsx">XLSX</option>
-        </optgroup>
-      </select>
-    </div>
+        <div class="help-card">
+          <div class="help-card-icon">🧪</div>
+          <h2>Survive & Capacity</h2>
+          <ul>
+            <li><strong>Platform Survival:</strong> Simulates social media compression algorithms (Twitter, Discord,
+              etc.) locally using Wet Paper Codes to ensure your payload survives upload.</li>
+            <li><strong>Live Capacity:</strong> Dynamic calculation matrix that predicts how much data a carrier can
+              hold across all methods based on its dimensions and depth.</li>
+          </ul>
+        </div>
 
-    <button type="submit" class="btn btn-primary btn-large" id="dec-submit">
-      <span class="btn-icon-left">🔓</span> Extract &amp; Decrypt
-    </button>
-  </form>
+        <div class="help-card">
+          <div class="help-card-icon">🧬</div>
+          <h2>Hybrid & Experimental</h2>
+          <ul>
+            <li><strong>Adaptive LSB:</strong> Content-aware algorithm that hides data in high-texture, noisy regions to
+              evade detectors.</li>
+            <li><strong>Video Motion:</strong> Evaluates temporal cost to embed data inside high-motion video frames,
+              leaving static scenes untouched.</li>
+            <li><strong>Linguistic Text:</strong> Context-preserving word substitutions via statistical N-gram analysis
+              to encode payload bits into paragraphs.</li>
+            <li><strong>Decoy Mode:</strong> Plausible deniability. Embed two payloads using two keys in the same
+              carrier. Reveal the decoy key under duress.</li>
+          </ul>
+        </div>
 
-  <div id="decode-result" class="result-area" style="display:none"></div>
-</section>
-
-
-<!-- ═══════════════ DETECT TAB ═══════════════ -->
-<section class="tab-panel" id="tab-detect">
-  <div class="panel-header">
-    <h1>Detect Hidden Content</h1>
-    <p class="panel-subtitle">
-      Analyze a suspicious file for signs of steganography using multiple statistical and forensic methods.
-    </p>
-  </div>
-
-  <div class="explainer-card">
-    <div class="explainer-icon">🔬</div>
-    <div>
-      <strong>Four detection engines:</strong>
-      <ul class="explainer-list">
-        <li><strong>Chi-Square:</strong> Detects LSB manipulation by analyzing pixel value distribution — natural images don't have equal pairs, hidden data does.</li>
-        <li><strong>RS Analysis:</strong> Estimates what percentage of pixels carry hidden data without needing the key.</li>
-        <li><strong>EXIF/Metadata:</strong> Scans all metadata fields, comments, thumbnails, and custom keys for forensic anomalies.</li>
-        <li><strong>Blind Extractor:</strong> Tries all common encoding parameters (channels, depths, orders) and scores what it finds.</li>
-      </ul>
-    </div>
-  </div>
-
-  <form id="detect-form" class="stego-form">
-    <div class="form-group">
-      <label class="form-label" for="det-file">Suspicious File</label>
-      <div class="drop-zone" id="det-file-drop">
-        <span class="drop-icon">🕵️</span>
-        <span class="drop-text">Drop any file to analyze<br>or <u>click to browse</u></span>
-        <input type="file" id="det-file" name="file" class="file-input">
-      </div>
-      <div class="file-info" id="det-file-info"></div>
-    </div>
-
-    <div class="detector-toggles">
-      <label class="checkbox-row"><input type="checkbox" name="chi2" checked> Chi-Square</label>
-      <label class="checkbox-row"><input type="checkbox" name="rs" checked> RS Analysis</label>
-      <label class="checkbox-row"><input type="checkbox" name="exif" checked> EXIF</label>
-      <label class="checkbox-row"><input type="checkbox" name="blind" checked> Blind</label>
-      <label class="checkbox-row"><input type="checkbox" name="ml" checked> ML</label>
-      <label class="checkbox-row"><input type="checkbox" name="fingerprint" checked> Fingerprint</label>
-      <label class="checkbox-row"><input type="checkbox" name="binary" checked> Binary</label>
-    </div>
-
-    <button type="submit" class="btn btn-secondary btn-large" id="det-submit">
-      <span class="btn-icon-left">🔬</span> Run All Detectors
-    </button>
-  </form>
-
-  <div id="detect-result" class="result-area" style="display:none"></div>
-</section>
-
-
-<!-- ═══════════════ CTF TAB ═══════════════ -->
-<section class="tab-panel" id="tab-ctf">
-  <div class="panel-header">
-    <h1>⚡ CTF Mode — Full Forensic Report</h1>
-    <p class="panel-subtitle">
-      Upload a challenge file and get a comprehensive forensic report — every detector, every finding,
-      extracted payloads if found. Built for CTF competitions and digital forensics.
-    </p>
-  </div>
-
-  <div class="explainer-card explainer-ctf">
-    <div class="explainer-icon">🏆</div>
-    <div>
-      <strong>Made for CTF challenges</strong>
-      <p>CTF Mode runs every detection engine simultaneously and produces a forensic report ranked by
-      confidence. If the blind extractor finds something, it's automatically downloaded.
-      Use this first when you have an unknown challenge file — it takes seconds.</p>
-    </div>
-  </div>
-
-  <form id="ctf-form" class="stego-form">
-    <div class="form-group">
-      <label class="form-label" for="ctf-file">Challenge File</label>
-      <div class="drop-zone ctf-drop" id="ctf-file-drop">
-        <span class="drop-icon">🚩</span>
-        <span class="drop-text">Drop the CTF challenge file<br>or <u>click to browse</u></span>
-        <input type="file" id="ctf-file" name="file" class="file-input">
-      </div>
-      <div class="file-info" id="ctf-file-info"></div>
-    </div>
-
-    <button type="submit" class="btn btn-ctf btn-large" id="ctf-submit">
-      <span class="btn-icon-left">⚡</span> Analyze Challenge
-    </button>
-  </form>
-
-  <div class="ctf-actions">
-    <button type="button" class="btn btn-secondary" id="ctf-copy-report">Copy Report</button>
-    <button type="button" class="btn btn-secondary" id="ctf-export-json">Export JSON</button>
-  </div>
-
-  <div id="ctf-result" class="result-area" style="display:none"></div>
-</section>
-
-
-<!-- ═══════════════ SURVIVE TAB ═══════════════ -->
-<section class="tab-panel" id="tab-survive">
-  <div class="panel-header">
-    <h1>Platform Survival Check</h1>
-    <p class="panel-subtitle">
-      Simulate social platform recompression locally and verify extraction resilience.
-    </p>
-  </div>
-
-  <form id="survive-form" class="stego-form">
-    <div class="form-group">
-      <label class="form-label" for="survive-carrier">Carrier File</label>
-      <div class="drop-zone" id="survive-carrier-drop">
-        <span class="drop-icon">🖼</span>
-        <span class="drop-text">Drop carrier image or video<br>or <u>click to browse</u></span>
-        <input type="file" id="survive-carrier" name="carrier" accept=".png,.jpg,.jpeg,.bmp,.gif,.webp,.mp4,.webm" class="file-input">
-      </div>
-      <div class="file-info" id="survive-carrier-info"></div>
-    </div>
-
-    <div class="form-group">
-      <label class="form-label" for="survive-payload">Payload File</label>
-      <div class="drop-zone" id="survive-payload-drop">
-        <span class="drop-icon">🔏</span>
-        <span class="drop-text">Drop payload file<br>or <u>click to browse</u></span>
-        <input type="file" id="survive-payload" name="payload" class="file-input">
-      </div>
-      <div class="file-info" id="survive-payload-info"></div>
-    </div>
-
-    <div class="form-group">
-      <label class="form-label" for="survive-key">Encryption Key</label>
-      <input type="password" id="survive-key" name="key" class="form-input" placeholder="Passphrase">
-    </div>
-
-    <div class="form-group">
-      <label class="form-label" for="survive-target">Target Platform</label>
-      <select id="survive-target" name="target" class="form-select">
-        <option value="twitter">Twitter</option>
-        <option value="instagram">Instagram</option>
-        <option value="telegram">Telegram</option>
-        <option value="discord">Discord</option>
-        <option value="whatsapp">WhatsApp</option>
-        <option value="facebook">Facebook</option>
-        <option value="tiktok">TikTok</option>
-        <option value="linkedin">LinkedIn</option>
-        <option value="reddit">Reddit</option>
-        <option value="signal">Signal</option>
-      </select>
-    </div>
-
-    <button type="submit" class="btn btn-secondary btn-large" id="survive-submit">
-      <span class="btn-icon-left">🧪</span> Run Simulation
-    </button>
-  </form>
-
-  <div id="survive-result" class="result-area" style="display:none"></div>
-</section>
-
-
-<!-- ═══════════════ CAPACITY TAB ═══════════════ -->
-<section class="tab-panel" id="tab-capacity">
-  <div class="panel-header">
-    <h1>Capacity Check</h1>
-    <p class="panel-subtitle">
-      Find out how much secret data a carrier file can hold before you start encoding.
-    </p>
-  </div>
-
-  <div class="explainer-card">
-    <div class="explainer-icon">📏</div>
-    <div>
-      <strong>Why check capacity first?</strong>
-      <p>Each carrier has a maximum payload size depending on its dimensions, bit depth, and encoding method.
-      A 512×512 PNG at depth=1 can hold about 96 KB. A 3-second WAV file can hold about 33 KB.
-      If your payload (after encryption) exceeds this, encoding will fail — check capacity first.</p>
-    </div>
-  </div>
-
-  <form id="capacity-form" class="stego-form">
-    <div class="form-group">
-      <label class="form-label" for="cap-file">Carrier File</label>
-      <div class="drop-zone" id="cap-file-drop">
-        <span class="drop-icon">📐</span>
-        <span class="drop-text">Drop carrier file here<br>or <u>click to browse</u></span>
-        <input type="file" id="cap-file" name="file" accept=".png,.jpg,.jpeg,.bmp,.gif,.webp,.mp4,.webm,.wav,.flac,.mp3,.ogg,.pdf,.docx,.xlsx,.txt" class="file-input">
-      </div>
-      <div class="file-info" id="cap-file-info"></div>
-    </div>
-
-    <div class="form-group">
-      <label class="form-label" for="cap-payload">Optional Payload File</label>
-      <div class="drop-zone" id="cap-payload-drop">
-        <span class="drop-icon">📦</span>
-        <span class="drop-text">Drop payload to calculate utilization percentages<br>or <u>click to browse</u></span>
-        <input type="file" id="cap-payload" name="payload" class="file-input">
-      </div>
-      <div class="file-info" id="cap-payload-info"></div>
-    </div>
-
-    <div class="form-row">
-      <div class="form-group half">
-        <label class="form-label" for="cap-method">Method</label>
-        <select id="cap-method" name="method" class="form-select">
-          <option value="">Auto-detect</option>
-          <option value="lsb">LSB</option>
-          <option value="adaptive-lsb">Adaptive LSB</option>
-          <option value="dct">DCT</option>
-          <option value="video-dct">Video DCT</option>
-          <option value="video-motion">Video Motion</option>
-          <option value="fingerprint-lsb">Fingerprint LSB</option>
-          <option value="alpha">Alpha</option>
-          <option value="palette">Palette</option>
-          <option value="audio-lsb">Audio LSB</option>
-          <option value="phase">Phase</option>
-          <option value="unicode">Unicode</option>
-          <option value="linguistic">Linguistic</option>
-          <option value="pdf">PDF</option>
-          <option value="docx">DOCX</option>
-          <option value="xlsx">XLSX</option>
-        </select>
-      </div>
-      <div class="form-group half">
-        <label class="form-label" for="cap-depth">Bit Depth: <span id="cap-depth-display">1</span></label>
-        <input type="range" id="cap-depth" name="depth" min="1" max="4" value="1" class="form-slider">
-      </div>
-    </div>
-
-    <button type="submit" class="btn btn-secondary btn-large" id="cap-submit">
-      <span class="btn-icon-left">📏</span> Check Capacity
-    </button>
-  </form>
-
-  <div class="form-group" style="margin-top:12px;">
-    <label class="form-label">Live Method Capacity Table</label>
-    <div id="cap-live-matrix" class="capacity-matrix empty">Drop a carrier to compute capacities across methods.</div>
-  </div>
-
-  <div id="capacity-result" class="result-area" style="display:none"></div>
-</section>
-
-
-<!-- ═══════════════ HELP TAB ═══════════════ -->
-<section class="tab-panel" id="tab-help">
-  <div class="panel-header">
-    <h1>How to Use StegoForge</h1>
-    <p class="panel-subtitle">A beginner-friendly guide to steganography and every feature in this toolkit.</p>
-  </div>
-
-  <div class="help-grid">
-
-    <div class="help-card">
-      <div class="help-card-icon">🤔</div>
-      <h2>What is Steganography?</h2>
-      <p>Steganography is the practice of hiding secret information <em>inside</em> ordinary files —
-      unlike encryption, which makes data unreadable, steganography makes the data <em>undetectable</em>.
-      A photo with a hidden message looks exactly like a normal photo.</p>
-      <p>StegoForge combines steganography AND encryption: your payload is first encrypted (AES-256)
-      then embedded, so even if someone finds the hidden data, they can't read it without your key.</p>
-    </div>
-
-    <div class="help-card">
-      <div class="help-card-icon">🖼</div>
-      <h2>Image Methods</h2>
-      <ul>
-        <li><strong>LSB (Pixel):</strong> Changes the last 1–4 bits of each pixel's color value. A 255-blue pixel becomes 254-blue — completely invisible. Best choice for PNG and BMP.</li>
-        <li><strong>DCT (JPEG):</strong> Embeds data in the math behind JPEG compression (frequency coefficients). More resistant to statistical detection than LSB.</li>
-        <li><strong>Alpha Channel:</strong> Hides in the transparency value of PNG/WebP pixels. Changing alpha by 1/256 is invisible to any viewer.</li>
-        <li><strong>Palette:</strong> Reorders the color table of GIF/indexed PNG images to encode bits. Very low capacity, but completely undetectable.</li>
-      </ul>
-    </div>
-
-    <div class="help-card">
-      <div class="help-card-icon">🎵</div>
-      <h2>Audio Methods</h2>
-      <ul>
-        <li><strong>Audio LSB:</strong> Modifies the last bit of each audio sample. At 16-bit audio, the distortion is 1/65536 of the amplitude range — completely inaudible. Great for WAV/FLAC.</li>
-        <li><strong>Phase Coding:</strong> Encodes data as phase shifts in audio frequency segments. Survives MP3 compression better than LSB because phase is partially preserved.</li>
-        <li><strong>Spectrogram Art:</strong> The most impressive method — embeds a visible image or text in the audio's frequency spectrum. Sounds normal but looks like art in Audacity.</li>
-      </ul>
-    </div>
-
-    <div class="help-card">
-      <div class="help-card-icon">📄</div>
-      <h2>Document Methods</h2>
-      <ul>
-        <li><strong>Unicode (TXT):</strong> Inserts invisible zero-width Unicode characters (U+200B, U+200C, U+200D) between words. The text looks 100% identical — even copy-paste works.</li>
-        <li><strong>PDF Injection:</strong> Adds a hidden /StegoData key to the PDF's metadata stream. Invisible in any PDF viewer, but StegoForge can extract it.</li>
-        <li><strong>DOCX/XLSX XML:</strong> Adds a custom XML file inside the document's ZIP archive. Word/Excel open the document normally; the hidden file is invisible.</li>
-      </ul>
-    </div>
-
-    <div class="help-card">
-      <div class="help-card-icon">🔐</div>
-      <h2>Encryption & Security</h2>
-      <ul>
-        <li><strong>AES-256-GCM:</strong> Military-grade authenticated encryption. Decrypting with the wrong key returns nothing — not garbage, not an error, nothing.</li>
-        <li><strong>Argon2id KDF:</strong> Your passphrase is never used directly. It's hashed with Argon2id (memory-hard, brute-force resistant) to derive the actual key.</li>
-        <li><strong>Decoy Mode:</strong> Stores two encrypted payloads. Under pressure, reveal the decoy key (returns innocent content). The real key stays secret.</li>
-        <li><strong>Polymorphic Embed:</strong> Your key also determines the pixel traversal order and channel selection, making signature-based detection much harder.</li>
-      </ul>
-    </div>
-
-    <div class="help-card">
-      <div class="help-card-icon">🕵️</div>
-      <h2>Advanced Forensics</h2>
-      <ul>
-        <li><strong>ML Analysis:</strong> Uses neural networks trained on Stego databases to detect probabilistic payload noise.</li>
-        <li><strong>PRNU Fingerprint:</strong> Analyzes camera sensor noise. Traditional embedding damages this fingerprint. StegoForge's Fingerprint method preserves it.</li>
-        <li><strong>Chi-Square & RS:</strong> Detects flat LSB embedding. "Adaptive LSB" dodges these successfully.</li>
-        <li><strong>Blind Extractor:</strong> Brute-forces every parameter combination to attempt payload extraction automatically during CTF mode.</li>
-      </ul>
-    </div>
-
-    <div class="help-card">
-      <div class="help-card-icon">🧪</div>
-      <h2>Survive & Capacity</h2>
-      <ul>
-        <li><strong>Platform Survival:</strong> Simulates social media compression algorithms (Twitter, Discord, etc.) locally using Wet Paper Codes to ensure your payload survives upload.</li>
-        <li><strong>Live Capacity:</strong> Dynamic calculation matrix that predicts how much data a carrier can hold across all methods based on its dimensions and depth.</li>
-      </ul>
-    </div>
-
-    <div class="help-card">
-      <div class="help-card-icon">🧬</div>
-      <h2>Hybrid & Experimental</h2>
-      <ul>
-        <li><strong>Adaptive LSB:</strong> Content-aware algorithm that hides data in high-texture, noisy regions to evade detectors.</li>
-        <li><strong>Video Motion:</strong> Evaluates temporal cost to embed data inside high-motion video frames, leaving static scenes untouched.</li>
-        <li><strong>Linguistic Text:</strong> Context-preserving word substitutions via statistical N-gram analysis to encode payload bits into paragraphs.</li>
-        <li><strong>Decoy Mode:</strong> Plausible deniability. Embed two payloads using two keys in the same carrier. Reveal the decoy key under duress.</li>
-      </ul>
-    </div>
-
-    <div class="help-card">
-      <div class="help-card-icon">💻</div>
-      <h2>Using the CLI</h2>
-      <p>StegoForge has a powerful command-line interface. Run <code>stegoforge</code> alone for the interactive menu, or use direct args for scripting:</p>
-      <pre class="code-block">stegoforge encode -c photo.png -p secret.txt -k "passphrase"
+        <div class="help-card">
+          <div class="help-card-icon">💻</div>
+          <h2>Using the CLI</h2>
+          <p>StegoForge has a powerful command-line interface. Run <code>stegoforge</code> alone for the interactive
+            menu, or use direct args for scripting:</p>
+          <pre class="code-block">stegoforge encode -c photo.png -p secret.txt -k "passphrase"
 stegoforge decode -f photo_stego.png -k "passphrase"
 stegoforge ctf -f challenge.png
 stegoforge ctf -f challenge.png --json > report.json
 cat file.png | stegoforge ctf --stdin</pre>
+        </div>
+
+        <div class="help-card">
+          <div class="help-card-icon">🏆</div>
+          <h2>CTF Tips</h2>
+          <ul>
+            <li>Always run <strong>CTF Mode</strong> first on an unknown file — one click, all detectors.</li>
+            <li>Check the <strong>confidence score</strong>: >70% = very likely stego; <30%=probably clean.</li>
+            <li>If the blind extractor finds candidates, the extracted .bin file may contain the flag directly or be an
+              encrypted blob (look for <code>SFRG</code> header).</li>
+            <li>For EXIF hints: some CTF challenges inject the key or method hint into metadata comments.</li>
+            <li>Try both the JSON output (for scripting) and the visual web UI for different workflows.</li>
+          </ul>
+        </div>
+
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Loading overlay -->
+  <div id="loading-overlay" style="display:none">
+    <div class="loading-box">
+      <div class="loading-spinner"></div>
+      <div class="loading-text" id="loading-text">Processing…</div>
     </div>
-
-    <div class="help-card">
-      <div class="help-card-icon">🏆</div>
-      <h2>CTF Tips</h2>
-      <ul>
-        <li>Always run <strong>CTF Mode</strong> first on an unknown file — one click, all detectors.</li>
-        <li>Check the <strong>confidence score</strong>: >70% = very likely stego; <30% = probably clean.</li>
-        <li>If the blind extractor finds candidates, the extracted .bin file may contain the flag directly or be an encrypted blob (look for <code>SFRG</code> header).</li>
-        <li>For EXIF hints: some CTF challenges inject the key or method hint into metadata comments.</li>
-        <li>Try both the JSON output (for scripting) and the visual web UI for different workflows.</li>
-      </ul>
-    </div>
-
   </div>
-</section>
 
-</main>
-
-<!-- Loading overlay -->
-<div id="loading-overlay" style="display:none">
-  <div class="loading-box">
-    <div class="loading-spinner"></div>
-    <div class="loading-text" id="loading-text">Processing…</div>
-  </div>
-</div>
-
-<script src="/static/app.js"></script>
+  <script src="/static/app.js"></script>
 </body>
+
 </html>

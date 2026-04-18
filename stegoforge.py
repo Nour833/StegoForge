@@ -6,6 +6,7 @@ Animated ASCII banner, interactive menu, and direct bypass arguments.
 All features accessible both interactively and via direct args.
 """
 import json
+import errno
 import os
 import sys
 import time
@@ -13,6 +14,7 @@ import io
 import platform
 import re
 import shutil
+import ssl
 import tempfile
 import urllib.error
 import urllib.request
@@ -20,6 +22,7 @@ from pathlib import Path
 from typing import Optional
 
 from core import sysmgr
+from core.version import __version__ as APP_VERSION
 import typer
 from rich.console import Console
 from rich.panel import Panel
@@ -178,6 +181,34 @@ def print_banner():
     
     console.print()
 
+    # CLI Panel
+    info_text = Text()
+    info_text.append("Framework Version: ", style="dim")
+    info_text.append(f"{_current_version()}-CORE", style="bold white")
+    info_text.append("   ·   ", style="dim")
+    info_text.append("Payload Modules: ", style="dim")
+    info_text.append("20", style="bold white")
+    info_text.append("   ·   ", style="dim")
+    info_text.append("Forensic Engines: ", style="dim")
+    info_text.append("11\n", style="bold white")
+    info_text.append("Encryption: ", style="bold bright_red")
+    info_text.append("AES-256-GCM", style="bold white")
+    info_text.append("   ·   ", style="dim")
+    info_text.append("Mode: ", style="bold bright_magenta")
+    info_text.append("STEALTH", style="bold white")
+
+    panel = Panel(
+        Align.center(info_text),
+        title="[bold white]StegoForge[/bold white]",
+        subtitle="[bold bright_yellow]Made by nour833[/bold bright_yellow]",
+        border_style="cyan",
+        box=box.ROUNDED,
+        padding=(1, 4),
+        expand=False
+    )
+    console.print(Align.center(panel))
+    console.print()
+
 
 def _version_tuple(value: str) -> tuple[int, ...]:
     parts = re.findall(r"\d+", value or "")
@@ -187,15 +218,60 @@ def _version_tuple(value: str) -> tuple[int, ...]:
 
 
 def _current_version() -> str:
+    env_version = str(os.getenv("STEGOFORGE_VERSION", "")).strip()
+    if env_version:
+        return env_version
+
+    if APP_VERSION:
+        return APP_VERSION
+
     try:
         from importlib.metadata import PackageNotFoundError, version
-
         try:
             return version("stegoforge")
         except PackageNotFoundError:
-            return "1.0.0"
+            return "0.0.0"
     except Exception:
-        return "1.0.0"
+        return "0.0.0"
+
+
+def _display_version(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "unknown"
+    if re.match(r"^[vV]\d", text):
+        return text[1:]
+    return text
+
+
+def _detect_install_kind() -> str:
+    if bool(getattr(sys, "frozen", False)):
+        return "release-binary"
+
+    repo_root = Path(__file__).resolve().parent
+    if (repo_root / ".git").exists():
+        return "source-checkout"
+
+    return "python-package"
+
+
+def _manual_update_command(install_kind: str) -> str:
+    if install_kind == "source-checkout":
+        repo_root = Path(__file__).resolve().parent
+        return f'git -C "{repo_root}" pull --ff-only'
+
+    if install_kind == "python-package":
+        py_exec = Path(sys.executable).resolve()
+        return f'"{py_exec}" -m pip install --upgrade stegoforge'
+
+    return ""
+
+
+def _print_update_versions(probe: dict):
+    current = _display_version(str(probe.get("current", "unknown")))
+    latest = _display_version(str(probe.get("latest", "unknown")))
+    console.print(f"[{C_INFO}]Current version: {current}[/{C_INFO}]")
+    console.print(f"[{C_INFO}]Latest release: {latest}[/{C_INFO}]")
 
 
 def _is_archive_asset(name: str) -> bool:
@@ -224,6 +300,13 @@ def _select_release_asset(assets: list[dict]) -> Optional[dict]:
     def _contains_any(haystack: str, needles: tuple[str, ...]) -> bool:
         return any(n in haystack for n in needles)
 
+    def _token_set(haystack: str) -> set[str]:
+        normalized = haystack.replace("-", "_")
+        return set(re.findall(r"[a-z0-9_]+", normalized))
+
+    def _contains_any_token(tokens: set[str], needles: tuple[str, ...]) -> bool:
+        return any(n in tokens for n in needles)
+
     all_arch_markers = (
         "x86_64", "amd64", "x64", "aarch64", "arm64", "armv7", "armv7l", "i386", "i686", "x86"
     )
@@ -239,6 +322,7 @@ def _select_release_asset(assets: list[dict]) -> Optional[dict]:
         if not name:
             continue
         lower = name.lower()
+        tokens = _token_set(lower)
 
         if any(lower.endswith(ext) for ext in (".sha256", ".sha512", ".sig", ".txt", ".json")):
             continue
@@ -249,8 +333,8 @@ def _select_release_asset(assets: list[dict]) -> Optional[dict]:
             continue
         score += 8
 
-        mentions_any_arch = _contains_any(lower, all_arch_markers)
-        if expected_arch and _contains_any(lower, expected_arch):
+        mentions_any_arch = _contains_any_token(tokens, all_arch_markers)
+        if expected_arch and _contains_any_token(tokens, expected_arch):
             score += 4
         elif mentions_any_arch and expected_arch:
             # Asset explicitly targets a different architecture.
@@ -276,6 +360,66 @@ def _select_release_asset(assets: list[dict]) -> Optional[dict]:
     return best
 
 
+def _is_cert_verification_error(exc: BaseException) -> bool:
+    if isinstance(exc, ssl.SSLCertVerificationError):
+        return True
+
+    if isinstance(exc, urllib.error.URLError):
+        reason = getattr(exc, "reason", None)
+        if isinstance(reason, ssl.SSLCertVerificationError):
+            return True
+        if isinstance(reason, ssl.SSLError):
+            reason_text = str(reason).lower()
+            return (
+                "certificate_verify_failed" in reason_text
+                or "unable to get local issuer certificate" in reason_text
+            )
+
+    message = str(exc).lower()
+    return (
+        "certificate_verify_failed" in message
+        or "unable to get local issuer certificate" in message
+    )
+
+
+def _certifi_ssl_context() -> Optional[ssl.SSLContext]:
+    try:
+        import certifi
+    except Exception:
+        return None
+
+    cafile = certifi.where()
+    if not cafile:
+        return None
+    return ssl.create_default_context(cafile=cafile)
+
+
+def _urlopen_with_ca_fallback(req: urllib.request.Request, timeout: int):
+    try:
+        return urllib.request.urlopen(req, timeout=timeout)
+    except (urllib.error.URLError, ssl.SSLError) as exc:
+        if not _is_cert_verification_error(exc):
+            raise
+
+        fallback_context = _certifi_ssl_context()
+        if fallback_context is None:
+            raise urllib.error.URLError(
+                "TLS certificate verification failed while contacting GitHub. "
+                "Install/update system CA certificates or install the 'certifi' package."
+            ) from exc
+
+        try:
+            return urllib.request.urlopen(req, timeout=timeout, context=fallback_context)
+        except (urllib.error.URLError, ssl.SSLError) as fallback_exc:
+            if _is_cert_verification_error(fallback_exc):
+                raise urllib.error.URLError(
+                    "TLS certificate verification failed while contacting GitHub even with "
+                    "the certifi CA bundle. Check proxy/TLS interception settings and trust "
+                    "store configuration."
+                ) from fallback_exc
+            raise
+
+
 def _download_release_asset(url: str, target: Path):
     target.parent.mkdir(parents=True, exist_ok=True)
     req = urllib.request.Request(
@@ -286,7 +430,7 @@ def _download_release_asset(url: str, target: Path):
         },
     )
 
-    with urllib.request.urlopen(req, timeout=120) as resp, target.open("wb") as out:
+    with _urlopen_with_ca_fallback(req, timeout=120) as resp, target.open("wb") as out:
         total = int(resp.headers.get("Content-Length", "0") or "0")
         chunk = 256 * 1024
 
@@ -314,8 +458,29 @@ def _download_release_asset(url: str, target: Path):
                     out.write(data)
 
 
+def _safe_replace(src: Path, dst: Path):
+    """Replace dst with src, handling cross-filesystem moves (EXDEV)."""
+    try:
+        os.replace(src, dst)
+        return
+    except OSError as exc:
+        if exc.errno != errno.EXDEV:
+            raise
+
+    staged = dst.parent / f".{dst.name}.new"
+    if staged.exists():
+        staged.unlink()
+
+    try:
+        shutil.copy2(src, staged)
+        os.replace(staged, dst)
+    finally:
+        staged.unlink(missing_ok=True)
+
+
 def op_update(check_only: bool = False, auto_apply: bool = False) -> dict:
     current = _current_version()
+    install_kind = _detect_install_kind()
     req = urllib.request.Request(
         GITHUB_RELEASES_LATEST_URL,
         headers={
@@ -324,7 +489,7 @@ def op_update(check_only: bool = False, auto_apply: bool = False) -> dict:
         },
     )
 
-    with urllib.request.urlopen(req, timeout=25) as resp:
+    with _urlopen_with_ca_fallback(req, timeout=25) as resp:
         release = json.loads(resp.read().decode("utf-8"))
 
     latest_tag = str(release.get("tag_name") or release.get("name") or "").strip()
@@ -338,14 +503,23 @@ def op_update(check_only: bool = False, auto_apply: bool = False) -> dict:
         "latest": latest_tag,
         "update_available": update_available,
         "release_url": release_url,
+        "install_kind": install_kind,
         "asset_name": str(selected.get("name")) if selected else "",
         "asset_url": str(selected.get("browser_download_url")) if selected else "",
         "downloaded_path": "",
         "applied": False,
         "can_auto_apply": False,
+        "manual_update_command": _manual_update_command(install_kind),
     }
 
-    if not update_available or not selected or check_only:
+    if not update_available or check_only:
+        return result
+
+    if install_kind != "release-binary":
+        # Source checkouts and pip installs should be updated via their native installers.
+        return result
+
+    if not selected:
         return result
 
     asset_name = str(selected.get("name", "")).strip()
@@ -381,7 +555,7 @@ def op_update(check_only: bool = False, auto_apply: bool = False) -> dict:
             if backup.exists():
                 backup.unlink()
             shutil.copy2(exe_path, backup)
-            os.replace(tmp_target, exe_path)
+            _safe_replace(tmp_target, exe_path)
             result["applied"] = True
             result["downloaded_path"] = str(exe_path)
             result["backup_path"] = str(backup)
@@ -397,24 +571,45 @@ def op_update(check_only: bool = False, auto_apply: bool = False) -> dict:
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
-    # Dashboard-style stats panel
-    info_text = (
-        f"[dim white]Framework Version: 1.0.0-CORE  ·  Payload Modules: 20  ·  "
-        f"Forensic Engines: 11[/dim white]\n"
-        f"[bold cyan]Encryption: AES-256-GCM[/bold cyan]  ·  "
-        f"[bold magenta]Mode: STEALTH[/bold magenta]"
-    )
-    
-    panel = Panel(
-        Align.center(info_text),
-        border_style="bright_blue",
-        padding=(1, 4),
-        title=f"[bold bright_white]StegoForge[/bold bright_white]",
-        subtitle=f"[{C_GOLD}]Made by nour833[/{C_GOLD}]"
-    )
-    console.print(Align.center(panel))
-    _ui_sleep(0.3)
-    console.print()
+
+# ── Stealth score registry (0-100, higher = harder to detect) ────────────────
+# Each score weights: chi-square resistance, RS resistance, ML evasion,
+# perceptual invisibility, and social-media survivability.
+STEALTH_SCORES: dict[str, int] = {
+    "adaptive-lsb":    88,
+    "fingerprint-lsb": 85,
+    "video-motion":    82,
+    "linguistic":      95,
+    "dct":             72,
+    "alpha":           70,
+    "palette":         78,
+    "lsb":             45,
+    "video-dct":       65,
+    "audio-lsb":       60,
+    "phase":           68,
+    "spectrogram":     55,
+    "unicode":         80,
+    "pdf":             75,
+    "docx":            74,
+    "xlsx":            74,
+    "elf":             50,
+    "pe":              50,
+    "tcp-covert":      40,
+    "timing-covert":   38,
+}
+
+
+def _stealth_bar(score: int) -> str:
+    """Return a compact colored stealth bar string for CLI output."""
+    filled = score // 5
+    empty  = 20 - filled
+    if score >= 80:
+        color = "bright_green"
+    elif score >= 60:
+        color = "yellow"
+    else:
+        color = "bright_red"
+    return f"[{color}]{'█' * filled}{'░' * empty}[/{color}] {score}/100"
 
 
 # ── Method registry ───────────────────────────────────────────────────────────
@@ -475,6 +670,7 @@ EXT_TO_METHOD = {
     ".xlsx": "xlsx",
     ".webp": "alpha",
     ".elf":  "elf", ".exe": "pe", ".dll": "pe",
+    ".sfrg": "sfrg"
 }
 
 
@@ -605,7 +801,7 @@ def _resize_carrier_if_needed(carrier_bytes: bytes, ext: str, max_dim: int) -> t
 def op_encode(
     carrier: str,
     payload: str,
-    key: str,
+    key: str | None,
     output: str | None,
     method: str | None,
     depth: int,
@@ -639,6 +835,9 @@ def op_encode(
 
     method = method or auto_detect_method(str(carrier_path))
 
+    # Resolve key from env var fallback before any encryption/placement logic.
+    key = key or os.getenv("STEGOFORGE_KEY", "")
+
     profile = None
     if target:
         from detect.survival import suggest_encode_profile
@@ -652,14 +851,18 @@ def op_encode(
 
     encoder = get_encoder(method)
 
-    # Encrypt payload
+    # Encrypt payload if key provided
     from core.crypto import aes
     if decoy and decoy_key:
+        if not key:
+            raise ValueError("Decoy mode requires a real payload key. Pass -k / --key or set STEGOFORGE_KEY.")
         from core.crypto import decoy as decoy_mod
         decoy_payload = Path(decoy).read_bytes()
         embed_bytes = decoy_mod.encode_dual(decoy_payload, decoy_key, payload_bytes, key)
-    else:
+    elif key:
         embed_bytes = aes.encrypt(payload_bytes, key)
+    else:
+        embed_bytes = payload_bytes
 
     if wet_paper:
         from core.image.wetpaper import encode_wet_paper
@@ -704,14 +907,35 @@ def op_encode(
 
         kwargs["progress_callback"] = _progress
 
-    # Capacity check — pass same kwargs so audio encoders receive ext
     cap_kwargs = {k: v for k, v in kwargs.items() if k != "key"}  # capacity doesn't need key
     cap = encoder.capacity(carrier_bytes, **cap_kwargs)
     if len(embed_bytes) > cap:
+        # Build smart suggestions
+        suggestions = []
+        if depth < 4 and _is_image_ext(ext) or _is_audio_ext(ext):
+            needed_depth = 1
+            for d in range(depth + 1, 5):
+                test_cap = encoder.capacity(carrier_bytes, depth=d, **{k: v for k, v in cap_kwargs.items() if k != "depth"})
+                if test_cap >= len(embed_bytes):
+                    needed_depth = d
+                    break
+            if needed_depth > depth:
+                suggestions.append(f"--depth {needed_depth} (gives ~{encoder.capacity(carrier_bytes, depth=needed_depth, **{k: v for k, v in cap_kwargs.items() if k != 'depth'}):,} bytes)")
+        if method not in ("adaptive-lsb",) and _is_image_ext(ext):
+            suggestions.append("--method adaptive-lsb (higher effective capacity + better stealth)")
+        budget_needed = len(embed_bytes) - cap
+        suggestions.append(f"use a larger carrier (need at least {budget_needed:,} more bytes of capacity)")
+        raw_payload_size = len(payload_bytes)
+        if len(embed_bytes) > 0:
+            overhead_ratio = len(embed_bytes) / raw_payload_size if raw_payload_size else 1
+            if raw_payload_size > 256:
+                compressed_est = int(raw_payload_size * 0.6)
+                suggestions.append(f"compress your payload first (e.g. zip — was {raw_payload_size:,} bytes, ~{compressed_est:,} compressed)")
         raise ValueError(
-            f"Encrypted payload too large: {len(embed_bytes)} bytes, "
-            f"method '{method}' capacity: {cap} bytes.\n"
-            f"Try: smaller payload, larger carrier, or higher --depth."
+            f"Encrypted payload too large: {len(embed_bytes):,} bytes, "
+            f"method '{method}' capacity at depth={depth}: {cap:,} bytes.\n"
+            f"  Needed: {len(embed_bytes):,} B  |  Available: {cap:,} B  |  Gap: {len(embed_bytes)-cap:,} B\n"
+            f"  Suggestions:\n" + "\n".join(f"    • {s}" for s in suggestions)
         )
 
     stego_bytes = encoder.encode(carrier_bytes, embed_bytes, **kwargs)
@@ -779,9 +1003,30 @@ def op_encode(
     return result
 
 
+def _guess_payload_ext(data: bytes) -> str:
+    if len(data) >= 12 and data[4:8] == b"ftyp": return ".mp4"
+    if data[:4] == b"PK\x03\x04": return ".zip"
+    if data[:4] == b"SFRG": return ".sfrg"
+    magics = [
+        (b"\x89PNG", ".png"), (b"\xff\xd8\xff", ".jpg"), (b"GIF8", ".gif"),
+        (b"BM", ".bmp"), (b"II*\x00", ".tiff"), (b"MM\x00*", ".tiff"),
+        (b"RIFF", ".wav"), (b"ID3", ".mp3"), (b"\xff\xfb", ".mp3"),
+        (b"fLaC", ".flac"), (b"OggS", ".ogg"), (b"%PDF", ".pdf"),
+        (b"\x7fELF", ".elf"), (b"MZ", ".exe"), (b"{\n", ".json")
+    ]
+    for magic, ext in magics:
+        if data.startswith(magic): return ext
+    try:
+        text = data[:512].decode("utf-8")
+        if text and sum(1 for c in text if c.isprintable() or c in "\n\r\t") / len(text) > 0.85:
+            return ".txt"
+    except UnicodeDecodeError: pass
+    return ".bin"
+
+
 def op_decode(
     file: str,
-    key: str,
+    key: str | None,
     output: str | None,
     method: str | None,
     wet_paper: bool,
@@ -798,6 +1043,8 @@ def op_decode(
         raise IOError(f"File not found: {file}")
 
     stego_bytes = file_path.read_bytes()
+    # Resolve key from env var fallback
+    key = key or os.getenv("STEGOFORGE_KEY", "")
     ext = file_path.suffix.lower()
     methods_to_try = [method] if method else []
     if not methods_to_try:
@@ -820,6 +1067,31 @@ def op_decode(
     last_error = None
 
     for try_method in methods_to_try:
+        if try_method == "sfrg":
+            if not key:
+                # Keyless decode for .sfrg means "extract as-is".
+                payload = stego_bytes
+                method = "sfrg"
+                wet_paper = False
+                wet_corrected_bits = 0
+                break
+            try:
+                payload = decoy_mod.decode_dual(stego_bytes, key)
+                method = "sfrg"
+                wet_paper = False
+                wet_corrected_bits = 0
+                break
+            except ValueError:
+                try:
+                    payload = aes.decrypt(stego_bytes, key)
+                    method = "sfrg"
+                    wet_paper = False
+                    wet_corrected_bits = 0
+                    break
+                except ValueError as e:
+                    last_error = str(e)
+            continue
+
         encoder = get_encoder(try_method)
         kwargs = {"key": key}
         if try_method in ("audio-lsb", "phase", "spectrogram", "video-dct", "video-motion"):
@@ -850,6 +1122,14 @@ def op_decode(
                 if wet_paper or is_wet_paper_blob(raw_bytes):
                     raw_bytes, corrected_bits, wet_used = decode_wet_paper(raw_bytes)
 
+                if not key:
+                    # For keyless decode, return extracted bytes directly (encrypted or plaintext).
+                    method = try_method
+                    payload = raw_bytes
+                    wet_paper = wet_used
+                    wet_corrected_bits = corrected_bits
+                    break
+
                 try:
                     payload = decoy_mod.decode_dual(raw_bytes, key)
                     method = try_method
@@ -857,11 +1137,14 @@ def op_decode(
                     wet_corrected_bits = corrected_bits
                     break
                 except ValueError:
-                    payload = aes.decrypt(raw_bytes, key)
-                    method = try_method
-                    wet_paper = wet_used
-                    wet_corrected_bits = corrected_bits
-                    break
+                    try:
+                        payload = aes.decrypt(raw_bytes, key)
+                        method = try_method
+                        wet_paper = wet_used
+                        wet_corrected_bits = corrected_bits
+                        break
+                    except ValueError:
+                        pass
             except ValueError as e:
                 last_error = str(e)
                 payload = None
@@ -877,7 +1160,8 @@ def op_decode(
         out_path = Path(output)
     else:
         stem = file_path.stem.replace("_stego", "")
-        out_path = file_path.with_stem(stem + "_decoded")
+        detected_ext = _guess_payload_ext(payload)
+        out_path = file_path.with_name(f"{stem}_decoded{detected_ext}")
 
     out_path.write_bytes(payload)
 
@@ -1076,11 +1360,12 @@ def op_ctf(file: str, json_mode: bool) -> dict:
         else:
             results.append(det.analyze(file_bytes, filename))
 
-    # Save extracted payloads from blind extractor
+    # Save extracted payloads from any successful keyless extraction
     saved_files = []
-    for r in results:
-        if r.extracted_payload and r.method in ("blind", "blind-audio"):
-            save_path = file_path.parent / f"extracted_{file_path.stem}.bin"
+    for idx, r in enumerate(results, start=1):
+        if r.extracted_payload:
+            method_slug = re.sub(r"[^a-zA-Z0-9_-]+", "_", r.method or f"detector{idx}")
+            save_path = file_path.parent / f"extracted_{file_path.stem}_{idx:02d}_{method_slug}.bin"
             save_path.write_bytes(r.extracted_payload)
             saved_files.append(str(save_path))
 
@@ -1144,6 +1429,7 @@ def op_capacity(carrier: str, method: str | None, depth: int) -> dict:
         "capacity_bytes": cap,
         "capacity_kb": round(cap / 1024, 2),
         "capacity_mb": round(cap / (1024 * 1024), 4),
+        "stealth_score": STEALTH_SCORES.get(method, 0),
     }
 
     if method == "dct":
@@ -1188,6 +1474,161 @@ def op_capacity(carrier: str, method: str | None, depth: int) -> dict:
             pass
 
     return result
+
+
+def op_diff(carrier: str, stego: str, save_heatmap: str | None = None) -> dict:
+    """Compare an original carrier against its stego version byte/pixel-by-pixel."""
+    carrier_path = Path(carrier)
+    stego_path   = Path(stego)
+    for p in (carrier_path, stego_path):
+        if not p.exists():
+            raise IOError(f"File not found: {p}")
+
+    ext = carrier_path.suffix.lower()
+    result: dict = {"carrier": str(carrier_path), "stego": str(stego_path)}
+
+    if _is_image_ext(ext):
+        from PIL import Image
+        import numpy as np
+
+        img_a = Image.open(carrier_path).convert("RGB")
+        img_b = Image.open(stego_path).convert("RGB")
+        if img_a.size != img_b.size:
+            img_b = img_b.resize(img_a.size, Image.LANCZOS)
+
+        arr_a = np.array(img_a, dtype=np.int16)
+        arr_b = np.array(img_b, dtype=np.int16)
+        diff  = np.abs(arr_a - arr_b)
+
+        changed_pixels = int(np.any(diff > 0, axis=2).sum())
+        total_pixels   = img_a.size[0] * img_a.size[1]
+        max_delta      = int(diff.max())
+        mean_delta     = float(diff.mean())
+
+        result.update({
+            "type": "image",
+            "dimensions": list(img_a.size),
+            "total_pixels": total_pixels,
+            "changed_pixels": changed_pixels,
+            "changed_percent": round(changed_pixels / total_pixels * 100, 4),
+            "max_delta": max_delta,
+            "mean_delta": round(mean_delta, 4),
+            "heatmap": None,
+        })
+
+        # Build amplified heatmap (bright = changed pixel, dark = unchanged)
+        amp = np.clip(diff.max(axis=2).astype(np.float32) * 20, 0, 255).astype(np.uint8)
+        heat_img = Image.fromarray(amp, mode="L").convert("RGB")
+        heat_w = min(img_a.width, 800)
+        heat_h = min(img_a.height, 800)
+        heat_img = heat_img.resize((heat_w, heat_h), Image.NEAREST)
+        out_heat = save_heatmap or str(
+            carrier_path.with_stem(carrier_path.stem + "_diff_heatmap").with_suffix(".png")
+        )
+        heat_img.save(out_heat)
+        result["heatmap"] = out_heat
+
+    elif _is_audio_ext(ext):
+        data_a = carrier_path.read_bytes()
+        data_b = stego_path.read_bytes()
+        min_len = min(len(data_a), len(data_b))
+        diff_bytes = sum(1 for x, y in zip(data_a[:min_len], data_b[:min_len]) if x != y)
+        diff_percent = round(diff_bytes / max(min_len, 1) * 100, 4)
+        result.update({
+            "type": "audio",
+            "size_original": len(data_a),
+            "size_stego": len(data_b),
+            "differing_bytes": diff_bytes,
+            "differing_percent": diff_percent,
+            # Compatibility aliases used by the web UI.
+            "changed_bytes": diff_bytes,
+            "changed_percent": diff_percent,
+        })
+    else:
+        data_a = carrier_path.read_bytes()
+        data_b = stego_path.read_bytes()
+        min_len = min(len(data_a), len(data_b))
+        diff_bytes = sum(1 for x, y in zip(data_a[:min_len], data_b[:min_len]) if x != y)
+        diff_percent = round(diff_bytes / max(min_len, 1) * 100, 4)
+        result.update({
+            "type": "binary",
+            "size_original": len(data_a),
+            "size_stego": len(data_b),
+            "differing_bytes": diff_bytes,
+            "differing_percent": diff_percent,
+            # Compatibility aliases used by the web UI.
+            "changed_bytes": diff_bytes,
+            "changed_percent": diff_percent,
+        })
+
+    return result
+
+
+def op_batch_encode(
+    batch_dir: str,
+    payload: str,
+    key: str,
+    output_dir: str | None,
+    method: str | None,
+    depth: int,
+    wet_paper: bool,
+) -> dict:
+    """Encode a payload into every compatible carrier file in a directory."""
+    key = key or os.getenv("STEGOFORGE_KEY", "")
+    if not key:
+        raise ValueError("Encryption key required. Pass -k / --key or set STEGOFORGE_KEY.")
+
+    bd = Path(batch_dir)
+    if not bd.is_dir():
+        raise IOError(f"Batch directory not found: {batch_dir}")
+    if not Path(payload).exists():
+        raise IOError(f"Payload file not found: {payload}")
+
+    out_dir = Path(output_dir) if output_dir else bd
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Supported carrier extensions minus binary/network (require special args)
+    skip = {".elf", ".exe", ".dll", ".bin"}
+    carriers = sorted(
+        f for f in bd.rglob("*")
+        if f.is_file() and f.suffix.lower() in EXT_TO_METHOD and f.suffix.lower() not in skip
+    )
+
+    rows: list[dict] = []
+    passed = 0
+    failed = 0
+
+    for cf in carriers:
+        auto_out = out_dir / (cf.stem + "_stego" + cf.suffix)
+        try:
+            r = op_encode(
+                str(cf), payload, key, str(auto_out),
+                method, depth,
+                None, None, wet_paper,
+                None, False, False,
+                None, None, None, False,
+            )
+            rows.append({
+                "file": cf.name,
+                "status": "success",
+                "method": r["method"],
+                "output": r["output"],
+                "payload_size": r["payload_size"],
+                "capacity": r["capacity"],
+            })
+            passed += 1
+        except Exception as exc:
+            rows.append({"file": cf.name, "status": "error", "error": str(exc)})
+            failed += 1
+
+    return {
+        "batch_dir": str(bd),
+        "payload": payload,
+        "total": len(carriers),
+        "passed": passed,
+        "failed": failed,
+        "rows": rows,
+    }
 
 
 class _SkippedDetector:
@@ -1372,10 +1813,12 @@ def print_ctf_report(report: dict):
 
 
 def print_capacity_result(result: dict):
+    stealth = STEALTH_SCORES.get(result.get("method", ""), 0)
     panel_content = (
         f"  [dim]Carrier  :[/dim] {result['carrier']}\n"
         f"  [dim]Method   :[/dim] [{C_ACCENT}]{result['method'].upper()}[/{C_ACCENT}]\n"
-        f"  [dim]Depth    :[/dim] {result['depth']} bit(s)\n\n"
+        f"  [dim]Depth    :[/dim] {result['depth']} bit(s)\n"
+        f"  [dim]Stealth  :[/dim]  {_stealth_bar(stealth)}\n\n"
         f"  [{C_SUCCESS}]Capacity:[/{C_SUCCESS}]\n"
         f"    [{C_GOLD}]{result['capacity_bytes']:>12,}[/{C_GOLD}] bytes\n"
         f"    [{C_GOLD}]{result['capacity_kb']:>12.2f}[/{C_GOLD}] KB\n"
@@ -1398,6 +1841,96 @@ def print_capacity_result(result: dict):
 
     console.print(Panel(panel_content, title=f"[{C_TITLE}]StegoForge — Capacity Check[/{C_TITLE}]",
                         border_style="yellow", padding=(1, 2)))
+
+
+def print_diff_result(result: dict):
+    """Pretty-print the result of op_diff."""
+    kind = result.get("type", "binary")
+    if kind == "image":
+        chg = result["changed_pixels"]
+        pct = result["changed_percent"]
+        total = result["total_pixels"]
+        stealth_ok = pct < 0.1
+        color = C_SUCCESS if stealth_ok else (C_WARN if pct < 1.0 else C_ERROR)
+        content = (
+            f"  [dim]Original :[/dim] {result['carrier']}\n"
+            f"  [dim]Stego    :[/dim] {result['stego']}\n"
+            f"  [dim]Mode     :[/dim] {result['dimensions'][0]}×{result['dimensions'][1]} px\n\n"
+            f"  [{color}]Changed pixels :[/{color}] {chg:,} / {total:,} ({pct}%)\n"
+            f"  [dim]Max delta      :[/dim] {result['max_delta']} (per channel, 0-255)\n"
+            f"  [dim]Mean delta     :[/dim] {result['mean_delta']:.4f}\n"
+        )
+        if result.get("heatmap"):
+            content += f"\n  [{C_INFO}]Heatmap saved:[/{C_INFO}] {result['heatmap']}\n"
+        console.print(Panel(content, title=f"[{C_TITLE}]StegoForge — Stego Diff (Image)[/{C_TITLE}]",
+                            border_style="cyan", padding=(1, 2)))
+    elif kind == "audio":
+        content = (
+            f"  [dim]Original :[/dim] {result['carrier']}\n"
+            f"  [dim]Stego    :[/dim] {result['stego']}\n\n"
+            f"  [dim]Differing bytes:[/dim] {result['differing_bytes']:,} "
+            f"({result['differing_percent']}%)\n"
+        )
+        console.print(Panel(content, title=f"[{C_TITLE}]StegoForge — Stego Diff (Audio)[/{C_TITLE}]",
+                            border_style="cyan", padding=(1, 2)))
+    else:
+        content = (
+            f"  [dim]Original :[/dim] {result['carrier']}\n"
+            f"  [dim]Stego    :[/dim] {result['stego']}\n\n"
+            f"  [dim]Differing bytes:[/dim] {result.get('differing_bytes', 'N/A')}\n"
+        )
+        console.print(Panel(content, title=f"[{C_TITLE}]StegoForge — Stego Diff (Binary)[/{C_TITLE}]",
+                            border_style="cyan", padding=(1, 2)))
+
+
+def print_batch_result(result: dict):
+    """Pretty-print the result of op_batch_encode."""
+    total  = result["total"]
+    passed = result["passed"]
+    failed = result["failed"]
+
+    table = Table(
+        title=f"[{C_TITLE}]StegoForge — Batch Encode Results[/{C_TITLE}]",
+        box=box.ROUNDED,
+        border_style="cyan",
+        show_lines=True,
+        header_style="bold cyan",
+    )
+    table.add_column("File", style="dim", overflow="fold", max_width=40)
+    table.add_column("Status", width=9)
+    table.add_column("Method", style="cyan", width=16)
+    table.add_column("Payload", width=10, justify="right")
+    table.add_column("Capacity", width=10, justify="right")
+    table.add_column("Output / Error", overflow="fold")
+
+    for row in result["rows"]:
+        if row["status"] == "success":
+            pct = round(row["payload_size"] / max(row["capacity"], 1) * 100, 1)
+            table.add_row(
+                row["file"],
+                f"[{C_SUCCESS}]✓ OK[/{C_SUCCESS}]",
+                row["method"],
+                f"{row['payload_size']:,} B",
+                f"{row['capacity']:,} B",
+                f"{Path(row['output']).name} ({pct}%)",
+            )
+        else:
+            table.add_row(
+                row["file"],
+                f"[{C_ERROR}]✗ ERR[/{C_ERROR}]",
+                "—", "—", "—",
+                f"[{C_ERROR}]{row.get('error', '')[:80]}[/{C_ERROR}]",
+            )
+
+    console.print(table)
+    color = C_SUCCESS if failed == 0 else C_WARN
+    console.print(
+        f"\n  [{color}]Batch complete:[/{color}] "
+        f"{passed} encoded, {failed} failed, {total} total  "
+        f"  [dim]Payload: {result['payload']}[/dim]"
+    )
+
+
 
 
 def _print_single_result(r: dict):
@@ -1652,16 +2185,24 @@ def interactive_update():
         console.print(f"[{C_ERROR}][ERROR][/{C_ERROR}] Update check failed: {e}")
         return
 
-    current = probe.get("current", "unknown")
-    latest = probe.get("latest", "unknown")
-    console.print(f"[{C_INFO}]Current version:[/{C_INFO}] {current}")
-    console.print(f"[{C_INFO}]Latest release:[/{C_INFO}] {latest}")
+    _print_update_versions(probe)
 
     if not probe.get("update_available"):
         console.print(f"[{C_SUCCESS}]You are up to date.[/{C_SUCCESS}]")
         return
 
     console.print(f"[{C_WARN}]Update available.[/{C_WARN}] {probe.get('release_url', '')}")
+    install_kind = str(probe.get("install_kind", ""))
+    if install_kind != "release-binary":
+        cmd = str(probe.get("manual_update_command") or "").strip()
+        if install_kind == "source-checkout":
+            console.print(f"[{C_INFO}]Source checkout detected. Update your clone with:[/{C_INFO}]")
+        else:
+            console.print(f"[{C_INFO}]Python package install detected. Update with:[/{C_INFO}]")
+        if cmd:
+            console.print(f"[{C_ACCENT}]{cmd}[/{C_ACCENT}]")
+        return
+
     if not probe.get("asset_url"):
         console.print(f"[{C_WARN}]No matching asset for this platform. Open releases page above.[/{C_WARN}]")
         return
@@ -1703,6 +2244,8 @@ def interactive_menu():
         ("[bold cyan]7[/bold cyan]", "Survival",  "Platform Survival Check"),
         ("[bold cyan]8[/bold cyan]", "Dead Drop", "Dead drop and key exchange commands"),
         ("[bold cyan]9[/bold cyan]", "Update",    "Check GitHub for newer releases and update"),
+        ("[bold cyan]d[/bold cyan]", "Diff",      "Compare original vs stego — pixel heatmap"),
+        ("[bold cyan]b[/bold cyan]", "Batch",     "Encode payload into every carrier in a folder"),
         ("[bold cyan]q[/bold cyan]", "Quit",      "Exit StegoForge"),
     ]
 
@@ -1759,11 +2302,27 @@ def interactive_menu():
             elif choice == "9" or choice == "update":
                 _menu_transition("Update")
                 interactive_update()
+            elif choice in ("d", "diff"):
+                _menu_transition("Diff")
+                carrier = Prompt.ask(f"  [{C_ACCENT}]Original (clean) carrier[/{C_ACCENT}]")
+                stego   = Prompt.ask(f"  [{C_ACCENT}]Stego carrier to compare[/{C_ACCENT}]")
+                with console.status(f"[{C_INFO}]Analyzing differences...[/{C_INFO}]", spinner="dots"):
+                    res = op_diff(carrier, stego)
+                print_diff_result(res)
+            elif choice in ("b", "batch"):
+                _menu_transition("Batch Encode")
+                b_dir    = Prompt.ask(f"  [{C_ACCENT}]Directory of carriers[/{C_ACCENT}]")
+                b_payload = Prompt.ask(f"  [{C_ACCENT}]Payload file[/{C_ACCENT}]")
+                b_key    = Prompt.ask(f"  [{C_ACCENT}]Encryption key[/{C_ACCENT}]", password=True)
+                b_out    = Prompt.ask(f"  [{C_ACCENT}]Output directory[/{C_ACCENT}] (Enter = same dir)", default="")
+                with console.status(f"[{C_INFO}]Batch encoding...[/{C_INFO}]", spinner="dots2"):
+                    res = op_batch_encode(b_dir, b_payload, b_key, b_out or None, None, 1, False)
+                print_batch_result(res)
             elif choice in ("q", "quit", "exit"):
                 console.print(f"[{C_DIM}]Goodbye.[/{C_DIM}]")
                 raise typer.Exit()
             else:
-                console.print(f"[{C_WARN}]Unknown command. Type 1-9 or q.[/{C_WARN}]")
+                console.print(f"[{C_WARN}]Unknown command. Type 1-9, d, b, or q (or the command name).[/{C_WARN}]")
         except (ValueError, IOError) as e:
             console.print(f"[{C_ERROR}][ERROR][/{C_ERROR}] {e}")
         except KeyboardInterrupt:
@@ -1812,14 +2371,24 @@ def cmd_update(
         console.print(f"[{C_ERROR}][ERROR][/{C_ERROR}] Update check failed: {e}")
         raise typer.Exit(1)
 
-    console.print(f"[{C_INFO}]Current version:[/{C_INFO}] {probe.get('current', 'unknown')}")
-    console.print(f"[{C_INFO}]Latest release:[/{C_INFO}] {probe.get('latest', 'unknown')}")
+    _print_update_versions(probe)
 
     if not probe.get("update_available"):
         console.print(f"[{C_SUCCESS}]You are up to date.[/{C_SUCCESS}]")
         return
 
     console.print(f"[{C_WARN}]Update available.[/{C_WARN}] {probe.get('release_url', '')}")
+    install_kind = str(probe.get("install_kind", ""))
+    if install_kind != "release-binary":
+        cmd = str(probe.get("manual_update_command") or "").strip()
+        if install_kind == "source-checkout":
+            console.print(f"[{C_INFO}]Source checkout detected. Update your clone with:[/{C_INFO}]")
+        else:
+            console.print(f"[{C_INFO}]Python package install detected. Update with:[/{C_INFO}]")
+        if cmd:
+            console.print(f"[{C_ACCENT}]{cmd}[/{C_ACCENT}]")
+        return
+
     if check_only:
         return
 
@@ -1853,7 +2422,7 @@ def cmd_update(
 def cmd_encode(
     carrier:   str  = typer.Option(..., "-c", "--carrier",   help="Path to carrier file"),
     payload:   str  = typer.Option(..., "-p", "--payload",   help="Path to payload file"),
-    key:       str  = typer.Option(..., "-k", "--key",       help="Encryption passphrase"),
+    key:       Optional[str] = typer.Option(None, "-k", "--key", help="Encryption passphrase (optional)"),
     output:    Optional[str] = typer.Option(None, "-o", "--output",  help="Output path (auto if omitted)"),
     method:    Optional[str] = typer.Option(None,       "--method",  help="Encoding method (auto-detected from extension)"),
     depth:     int  = typer.Option(1,    "--depth",     help="Bit depth 1-4 (higher = more capacity, less invisible)"),
@@ -1918,7 +2487,7 @@ def cmd_encode(
 @app.command("decode", help="Extract and decrypt a hidden payload")
 def cmd_decode(
     file:      str  = typer.Option(..., "-f", "--file",   help="Path to stego file"),
-    key:       str  = typer.Option(..., "-k", "--key",    help="Decryption passphrase"),
+    key:       Optional[str] = typer.Option(None, "-k", "--key", help="Decryption passphrase (optional)"),
     output:    Optional[str] = typer.Option(None, "-o", "--output", help="Output path (auto if omitted)"),
     method:    Optional[str] = typer.Option(None,       "--method", help="Encoding method (auto-detected if omitted)"),
     wet_paper: bool = typer.Option(False, "--wet-paper", help="Decode payload as wet paper encoded before decryption"),
@@ -1974,9 +2543,13 @@ def cmd_detect(
     try:
         if stdin:
             data = sys.stdin.buffer.read()
-            tmpfile = Path("/tmp/stegoforge_stdin_detect.bin")
-            tmpfile.write_bytes(data)
-            result = op_detect(str(tmpfile), chi2, rs, exif, blind, ml, fingerprint, binary, all_detect, json_mode)
+            fd, tmpfile_path = tempfile.mkstemp(prefix="stegoforge_stdin_detect_", suffix=".bin")
+            try:
+                with os.fdopen(fd, "wb") as fh:
+                    fh.write(data)
+                result = op_detect(tmpfile_path, chi2, rs, exif, blind, ml, fingerprint, binary, all_detect, json_mode)
+            finally:
+                Path(tmpfile_path).unlink(missing_ok=True)
         else:
             result = op_detect(file, chi2, rs, exif, blind, ml, fingerprint, binary, all_detect, json_mode)
         if json_mode:
@@ -2022,13 +2595,17 @@ def cmd_ctf(
                         console.print(f"[{C_WARN}][SKIP][/{C_WARN}] {r['file']}: {r['error']}")
         elif stdin:
             data = sys.stdin.buffer.read()
-            tmpfile = Path("/tmp/stegoforge_stdin_ctf.bin")
-            tmpfile.write_bytes(data)
-            result = op_ctf(str(tmpfile), json_mode)
-            if json_mode:
-                print(json.dumps(result, indent=2))
-            else:
-                print_ctf_report(result)
+            fd, tmpfile_path = tempfile.mkstemp(prefix="stegoforge_stdin_ctf_", suffix=".bin")
+            try:
+                with os.fdopen(fd, "wb") as fh:
+                    fh.write(data)
+                result = op_ctf(tmpfile_path, json_mode)
+                if json_mode:
+                    print(json.dumps(result, indent=2))
+                else:
+                    print_ctf_report(result)
+            finally:
+                Path(tmpfile_path).unlink(missing_ok=True)
         else:
             with console.status(
                 f"[{C_INFO}]Running all detectors on {Path(file).name}...[/{C_INFO}]",
@@ -2319,6 +2896,145 @@ def cmd_web(
     except (ValueError, IOError, OSError) as e:
         console.print(f"[{C_ERROR}][ERROR][/{C_ERROR}] Failed to start web UI: {e}")
         raise typer.Exit(1)
+
+
+@app.command("diff", help="Compare an original carrier against its stego version — shows changed pixels/bytes and saves a heatmap")
+def cmd_diff(
+    carrier:     str           = typer.Option(..., "-c", "--carrier",       help="Original (clean) carrier file"),
+    stego:       str           = typer.Option(..., "-s", "--stego",         help="Stego carrier file to compare"),
+    save_heatmap: Optional[str] = typer.Option(None,    "--save-heatmap",   help="Path to save amplified diff heatmap PNG (auto-named if omitted)"),
+    json_mode:   bool          = typer.Option(False,    "--json",           help="Output JSON"),
+):
+    """
+    Compares two files and reports exactly which pixels (images) or bytes (audio/binary)
+    were modified during encoding. Useful for verifying stealth and diagnosing artifacts.
+
+    Saves a heatmap PNG where bright regions indicate modified pixels.
+
+    Examples:
+      stegoforge diff -c cover.png -s stego.png
+      stegoforge diff -c cover.png -s stego.png --save-heatmap report_heat.png --json
+    """
+    try:
+        result = op_diff(carrier, stego, save_heatmap)
+        if json_mode:
+            print(json.dumps(result, indent=2))
+        else:
+            print_diff_result(result)
+    except (ValueError, IOError) as e:
+        if json_mode:
+            print(json.dumps({"status": "error", "message": str(e)}))
+        else:
+            console.print(f"[{C_ERROR}][ERROR][/{C_ERROR}] {e}")
+        raise typer.Exit(1)
+
+
+@app.command("batch", help="Encode a payload into every compatible carrier in a directory")
+def cmd_batch(
+    batch_dir:  str           = typer.Option(..., "-d", "--dir",       help="Directory containing carrier files"),
+    payload:    str           = typer.Option(..., "-p", "--payload",   help="Payload file to embed in each carrier"),
+    key:        str           = typer.Option("",  "-k", "--key",       help="Encryption passphrase (or set STEGOFORGE_KEY env var)"),
+    output_dir: Optional[str]  = typer.Option(None,    "-o", "--output", help="Output directory for stego files (defaults to source dir)"),
+    method:     Optional[str]  = typer.Option(None,    "--method",    help="Force encoding method (auto-detected per file if omitted)"),
+    depth:      int            = typer.Option(1,        "--depth",     help="Bit depth 1-4 for LSB-based methods"),
+    wet_paper:  bool           = typer.Option(False,    "--wet-paper", help="Enable Reed-Solomon wet-paper protection on each file"),
+    json_mode:  bool           = typer.Option(False,    "--json",      help="Output JSON summary"),
+):
+    """
+    Walks a directory and embeds the same payload into every supported carrier file.
+    Supported formats: PNG, BMP, TIFF, WEBP, JPG, GIF, WAV, MP3, FLAC, OGG, MP4,
+    MKV, AVI, PDF, DOCX, XLSX, TXT.
+
+    Each output file is named <original>_stego.<ext> and saved alongside the original
+    (or in --output if specified).
+
+    Examples:
+      stegoforge batch -d ./images/ -p secret.txt -k mykey
+      stegoforge batch -d ./carriers/ -p msg.pdf -k mykey -o ./out/ --depth 2 --json
+    """
+    try:
+        result = op_batch_encode(batch_dir, payload, key, output_dir, method, depth, wet_paper)
+        if json_mode:
+            print(json.dumps(result, indent=2))
+        else:
+            print_batch_result(result)
+    except (ValueError, IOError) as e:
+        if json_mode:
+            print(json.dumps({"status": "error", "message": str(e)}))
+        else:
+            console.print(f"[{C_ERROR}][ERROR][/{C_ERROR}] {e}")
+        raise typer.Exit(1)
+
+
+@app.command("completion", help="Print shell completion script for bash, zsh, or fish")
+def cmd_completion(
+    shell: str = typer.Argument("bash", help="Shell type: bash | zsh | fish"),
+):
+    """
+    Prints a shell completion script for StegoForge commands.
+
+    Usage:
+      # bash (add to ~/.bashrc):
+      eval "$(stegoforge completion bash)"
+
+      # zsh (add to ~/.zshrc):
+      eval "$(stegoforge completion zsh)"
+
+      # fish:
+      stegoforge completion fish | source
+    """
+    commands = [
+        "encode", "decode", "detect", "ctf", "capacity",
+        "survive", "diff", "batch", "web", "update", "init", "completion",
+    ]
+    if shell == "bash":
+        cmds_str = " ".join(commands)
+        script = f"""# StegoForge bash completion
+_stegoforge_complete() {{
+    local cur prev words cword
+    _init_completion || return
+    local commands="{cmds_str}"
+    if [[ $cword -eq 1 ]]; then
+        COMPREPLY=( $(compgen -W "$commands" -- "$cur") )
+        return
+    fi
+    case "$prev" in
+        -f|--file|-c|--carrier|-s|--stego|-p|--payload|-o|--output)
+            COMPREPLY=( $(compgen -f -- "$cur") ); return ;;
+        -d|--dir|--output)
+            COMPREPLY=( $(compgen -d -- "$cur") ); return ;;
+        --method)
+            COMPREPLY=( $(compgen -W "lsb adaptive-lsb fingerprint-lsb dct alpha palette audio-lsb phase spectrogram unicode pdf docx xlsx video-dct video-motion elf pe linguistic" -- "$cur") ); return ;;
+        --target)
+            COMPREPLY=( $(compgen -W "twitter instagram telegram discord whatsapp facebook tiktok linkedin reddit signal" -- "$cur") ); return ;;
+    esac
+    COMPREPLY=( $(compgen -W "--help" -- "$cur") )
+}}
+complete -F _stegoforge_complete stegoforge
+"""
+        print(script)
+    elif shell == "zsh":
+        cmds_str = "\n    ".join(f"'{c}'" for c in commands)
+        script = f"""# StegoForge zsh completion
+#compdef stegoforge
+_stegoforge() {{
+    local -a commands
+    commands=(
+    {cmds_str}
+    )
+    _describe 'command' commands
+}}
+_stegoforge
+"""
+        print(script)
+    elif shell == "fish":
+        lines = [f"complete -c stegoforge -f -a '{c}'" for c in commands]
+        print("\n".join(lines))
+    else:
+        console.print(f"[{C_ERROR}]Unknown shell '{shell}'. Use: bash, zsh, or fish.[/{C_ERROR}]")
+        raise typer.Exit(1)
+
+
 
 
 import multiprocessing

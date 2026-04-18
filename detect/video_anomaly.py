@@ -76,7 +76,22 @@ class VideoAnomalyDetector(BaseDetector):
         confidence = float(min(1.0, zmax / 6.0))
         detected = confidence >= 0.35
 
-        return DetectionResult(
+        extracted = None
+        try:
+            from core.video.dct import VideoDCTEncoder
+            extracted = VideoDCTEncoder().decode(file_bytes)
+        except Exception:
+            try:
+                from core.video.motion import VideoMotionEncoder
+                extracted = VideoMotionEncoder().decode(file_bytes)
+            except Exception:
+                pass
+
+        if extracted is not None:
+            confidence = 1.0
+            detected = True
+
+        res = DetectionResult(
             method=self.name,
             detected=detected,
             confidence=round(confidence, 4),
@@ -85,11 +100,13 @@ class VideoAnomalyDetector(BaseDetector):
                 "score_mean": round(m, 6),
                 "score_std": round(s, 6),
                 "interpretation": (
-                    "I-frame DCT distribution deviates from expected baseline"
+                    "I-frame DCT distribution deviates from expected baseline OR payload extracted"
                     if detected else "No strong keyframe DCT anomaly detected"
                 ),
             },
         )
+        res.extracted_payload = extracted
+        return res
 
 
 def _frame_score(gray: np.ndarray) -> float:

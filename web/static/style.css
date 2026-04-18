@@ -278,14 +278,26 @@ body {
   color: var(--text-primary);
   font-family: inherit;
   font-size: 0.9rem;
-  padding: 10px 14px;
+  padding: 10px 36px 10px 14px;
   transition: var(--transition);
   outline: none;
   cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23888888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 16px;
 }
-.form-select:focus { border-color: var(--accent-cyan); }
-.form-select optgroup { color: var(--text-muted); font-style: normal; }
-.form-select option { background: var(--bg-surface); }
+.form-select:hover {
+  border-color: rgba(255, 255, 255, 0.2);
+}
+.form-select:focus { 
+  border-color: var(--accent-cyan); 
+  box-shadow: 0 0 0 2px rgba(0,212,255,0.1); 
+}
+.form-select optgroup { color: var(--text-muted); font-style: normal; font-weight: 600; }
+.form-select option { background: var(--bg-surface); color: var(--text-primary); padding: 8px; }
 
 /* Method Description */
 .method-description {
@@ -741,4 +753,22 @@ body {
   .form-row { flex-direction: column; }
   .panel-header h1 { font-size: 1.5rem; }
   .main-container { padding: 24px 16px 60px; }
+}
+
+/* ── Mobile Hamburger Nav ───────────────────────────────────────────────────── */
+@media (max-width: 600px) {
+  #mobile-nav-toggle { display: block !important; }
+  .header-inner { flex-direction: row; flex-wrap: wrap; height: auto; gap: 8px; padding: 10px 0; align-items: center; justify-content: space-between; }
+  .tab-nav {
+    display: none;
+    flex-direction: column;
+    width: 100%;
+    gap: 4px;
+    padding: 8px 0;
+    border-top: 1px solid var(--border-subtle);
+    margin-top: 4px;
+    animation: fadeIn 0.2s ease;
+  }
+  .tab-nav.mobile-open { display: flex; }
+  .tab-btn { text-align: left; padding: 10px 16px; border-radius: var(--radius-sm); width: 100%; }
 }

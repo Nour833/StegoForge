@@ -8,6 +8,8 @@
   [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
   [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
   [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey?style=for-the-badge)](https://github.com/Nour833/StegoForge/releases)
+  [![GitHub Stars](https://img.shields.io/github/stars/Nour833/StegoForge?style=for-the-badge&logo=github&color=gold)](https://github.com/Nour833/StegoForge/stargazers)
+  [![GitHub Downloads](https://img.shields.io/github/downloads/Nour833/StegoForge/total?style=for-the-badge&logo=github&color=brightgreen)](https://github.com/Nour833/StegoForge/releases)
   [![CTF](https://img.shields.io/badge/CTF-Ready-red?style=for-the-badge)](#-3-blind-forensics--ctf-mode-zero-knowledge)
 </div>
 
@@ -21,6 +23,43 @@ Head over to the **[Releases Page](https://github.com/Nour833/StegoForge/release
 * No `pip install` required.
 * No `PATH` configurations.
 * **Just execute it.**
+
+---
+
+## 🚀 Quick Start in 30 Seconds
+
+```bash
+# 1. Hide a file inside an image (AES-256-GCM encrypted, auto-method)
+stegoforge encode -c photo.png -p secret.pdf -k "my-pass"
+
+# 2. Retrieve the hidden file
+stegoforge decode -f photo_stego.png -k "my-pass"
+
+# 3. CTF one-click forensic dump on any suspicious file
+stegoforge ctf -f suspicious.mp3
+
+# 4. Compare original vs stego — pixel heatmap
+stegoforge diff -c photo.png -s photo_stego.png
+
+# 5. Batch embed a secret into every carrier in a folder
+stegoforge batch -d ./carriers/ -p secret.txt -k "my-pass"
+
+# 6. Check capacity and stealth score of a carrier
+stegoforge capacity -c photo.png --depth 2
+
+# 7. Simulate Twitter recompression and test payload survives
+stegoforge encode -c photo.png -p secret.txt -k "my-pass" --target twitter --test-survival
+
+# 8. Launch the local web UI (no data ever leaves your machine)
+stegoforge web
+
+# Install tab-completion (bash)
+eval "$(stegoforge completion bash)"
+
+# Use env var to avoid key in shell history
+export STEGOFORGE_KEY="my-pass"
+stegoforge decode -f stego.png   # key read from env
+```
 
 ---
 

@@ -63,9 +63,29 @@ class BinaryDetector(BaseDetector):
         conf = 0.0
         if regions:
             conf = min(1.0, suspicious / max(1.0, len(regions)))
+            
+        extracted = None
+        try:
+            if btype == "PE":
+                from core.binary.pe import PEEncoder
+                extracted = PEEncoder().decode(file_bytes)
+            elif btype == "ELF":
+                from core.binary.elf import ELFEncoder
+                extracted = ELFEncoder().decode(file_bytes)
+        except Exception:
+            pass
+
+        if extracted is not None:
+            conf = 1.0
+            nonzero_regions += 1
+            findings.insert(0, {
+                "field": "Slack Space",
+                "description": "Valid StegoForge payload identified and blindly extracted!",
+                "suspicion": "high"
+            })
 
         detected = conf >= 0.2 or nonzero_regions > 0
-        return DetectionResult(
+        res = DetectionResult(
             method=self.name,
             detected=detected,
             confidence=round(conf, 4),
@@ -75,11 +95,13 @@ class BinaryDetector(BaseDetector):
                 "high_entropy_regions": high_entropy_regions,
                 "nonzero_regions": nonzero_regions,
                 "interpretation": (
-                    "Binary slack/notes anomalies detected" if detected else "No strong binary slack anomalies detected"
+                    "Binary slack/notes anomalies OR valid payload detected" if detected else "No strong anomalies detected"
                 ),
             },
             findings=findings,
         )
+        res.extracted_payload = extracted
+        return res
 
 
 def _entropy(data: bytes) -> float:

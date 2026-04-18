@@ -50,8 +50,24 @@ class PDFAnomalyDetector(BaseDetector):
             suspicious += 0.25
 
         conf = float(max(0.0, min(1.0, suspicious)))
+        
+        extracted = None
+        try:
+            from core.document.pdf import PDFEncoder
+            extracted = PDFEncoder().decode(file_bytes)
+        except Exception:
+            pass
+
+        if extracted is not None:
+            conf = 1.0
+            findings.insert(0, {
+                "field": "/StegoData",
+                "description": "Valid StegoForge payload explicitly extracted from metadata!",
+                "suspicion": "high"
+            })
+
         detected = conf >= 0.35
-        return DetectionResult(
+        res = DetectionResult(
             method=self.name,
             detected=detected,
             confidence=round(conf, 4),
@@ -60,12 +76,14 @@ class PDFAnomalyDetector(BaseDetector):
                 "tail_entropy": round(tail_entropy, 6),
                 "findings_count": len(findings),
                 "interpretation": (
-                    "PDF structure includes suspicious embedded/active objects"
+                    "PDF structure includes suspicious embedded/active objects OR payload extracted"
                     if detected else "No strong PDF structural stego indicators detected"
                 ),
             },
             findings=findings,
         )
+        res.extracted_payload = extracted
+        return res
 
 
 def _entropy(data: bytes) -> float:

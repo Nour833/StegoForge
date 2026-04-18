@@ -51,7 +51,19 @@ class AudioAnomalyDetector(BaseDetector):
             conf = float(np.clip(0.65 * lsb_uniformity + 0.35 * deriv_signal, 0.0, 1.0))
 
             detected = conf >= 0.35
-            return DetectionResult(
+            
+            extracted = None
+            try:
+                from core.audio.phase import PhaseEncoder
+                extracted = PhaseEncoder().decode(file_bytes)
+            except Exception:
+                pass
+                
+            if extracted is not None:
+                conf = 1.0
+                detected = True
+
+            res = DetectionResult(
                 method=self.name,
                 detected=detected,
                 confidence=round(conf, 4),
@@ -61,11 +73,13 @@ class AudioAnomalyDetector(BaseDetector):
                     "smooth_derivative_ratio": round(smooth_ratio, 6),
                     "derivative_variance": round(deriv_var, 6),
                     "interpretation": (
-                        "Sample-level bit-plane statistics look suspicious for audio stego"
+                        "Sample-level bit-plane statistics look suspicious OR phase payload extracted"
                         if detected else "No strong sample-level stego anomaly detected"
                     ),
                 },
             )
+            res.extracted_payload = extracted
+            return res
         except Exception as exc:
             return DetectionResult(
                 method=self.name,

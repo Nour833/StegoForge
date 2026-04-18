@@ -54,6 +54,66 @@ def _is_video_method(method: str | None) -> bool:
     return method in {"video-dct", "video-motion"}
 
 
+# Magic bytes → (mime, extension)
+_MAGIC_MAP = [
+    (b"\x89PNG",           "image/png",        ".png"),
+    (b"\xff\xd8\xff",      "image/jpeg",       ".jpg"),
+    (b"GIF8",              "image/gif",        ".gif"),
+    (b"BM",                "image/bmp",        ".bmp"),
+    (b"II*\x00",           "image/tiff",       ".tiff"),
+    (b"MM\x00*",           "image/tiff",       ".tiff"),
+    (b"RIFF",              "audio/wav",        ".wav"),
+    (b"ID3",               "audio/mpeg",       ".mp3"),
+    (b"\xff\xfb",          "audio/mpeg",       ".mp3"),
+    (b"fLaC",              "audio/flac",       ".flac"),
+    (b"OggS",              "audio/ogg",        ".ogg"),
+    (b"\x00\x00\x00",      None,               None),   # placeholder (mp4 check below)
+    (b"%PDF",              "application/pdf",  ".pdf"),
+    (b"PK\x03\x04",        "application/zip",  ".zip"),  # also docx/xlsx
+    (b"\x7fELF",           "application/x-elf", ".elf"),
+    (b"MZ",                "application/x-pe",  ".exe"),
+    (b"{\n", None, None),   # placeholder JSON
+]
+
+
+def _detect_payload_type(data: bytes) -> tuple[str, str]:
+    """Return (mime_type, extension) guessed from magic bytes."""
+    if len(data) >= 12:
+        # ISO base media (mp4/mov) — ftyp box at offset 4
+        if data[4:8] == b"ftyp":
+            return "video/mp4", ".mp4"
+    if data[:4] == b"PK\x03\x04":
+        # Could be DOCX or XLSX inside a zip
+        return "application/zip", ".zip"
+    if data[:4] == b"SFRG":
+        return "application/octet-stream", ".sfrg"
+    for magic, mime, ext in _MAGIC_MAP:
+        if mime and data[:len(magic)] == magic:
+            return mime, ext
+    # Try UTF-8 text heuristic
+    try:
+        text = data[:512].decode("utf-8")
+        printable = sum(1 for c in text if c.isprintable() or c in "\n\r\t")
+        if text and (printable / max(len(text), 1)) > 0.85:
+            return "text/plain", ".txt"
+    except UnicodeDecodeError:
+        pass
+    return "application/octet-stream", ".bin"
+
+
+def _cleanup_old_artifacts(max_age_seconds: int = 3600):
+    """Delete web artifact temp files older than max_age_seconds."""
+    import time
+    now = time.time()
+    tmp_dir = Path(tempfile.gettempdir())
+    for f in tmp_dir.glob(f"{ARTIFACT_PREFIX}*"):
+        try:
+            if now - f.stat().st_mtime > max_age_seconds:
+                f.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def _encode_operation(form, files) -> tuple[dict, bytes, str]:
     carrier_file = files.get("carrier")
     payload_file = files.get("payload")
@@ -71,8 +131,6 @@ def _encode_operation(form, files) -> tuple[dict, bytes, str]:
 
     if not carrier_file or not payload_file:
         raise ValueError("Both carrier and payload files are required")
-    if not key:
-        raise ValueError("Encryption key is required")
 
     from stegoforge import op_encode
     from core.audio._convert import has_ffmpeg
@@ -129,8 +187,6 @@ def _decode_operation(form, files) -> tuple[dict, bytes]:
 
     if not stego_file:
         raise ValueError("Stego file is required")
-    if not key:
-        raise ValueError("Decryption key is required")
 
     from stegoforge import op_decode
     from core.audio._convert import has_ffmpeg
@@ -148,6 +204,16 @@ def _decode_operation(form, files) -> tuple[dict, bytes]:
         result = op_decode(str(stego_path), key, None, method, wet_paper, False)
         payload = Path(result["output"]).read_bytes()
 
+    # Detect payload MIME type and choose a smarter filename
+    mime, detected_ext = _detect_payload_type(payload)
+    # Honor any explicit output extension from op_decode if set
+    out_path = Path(result.get("output", ""))
+    ext = out_path.suffix if out_path.suffix and out_path.suffix != ".bin" else detected_ext
+    dl_name = f"decoded_payload{ext}"
+    result["download_name"] = dl_name
+    result["detected_mime"] = mime
+    result["detected_ext"] = ext
+
     return result, payload
 
 
@@ -160,6 +226,8 @@ def create_app():
         app = Flask(__name__, template_folder="templates", static_folder="static")
     CORS(app)
     app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024  # 200MB max upload
+
+    _cleanup_old_artifacts()
 
     @app.route("/")
     def index():
@@ -279,8 +347,8 @@ def create_app():
             method = request.form.get("method", None) or None
             depth = int(request.form.get("depth", 1))
 
-            if not carrier_file or not payload_file or not key:
-                return jsonify({"error": "carrier, payload, and key are required"}), 400
+            if not carrier_file or not payload_file:
+                return jsonify({"error": "carrier and payload are required"}), 400
 
             from stegoforge import op_encode
 
@@ -426,37 +494,36 @@ def create_app():
     @app.route("/decode", methods=["POST"])
     def decode():
         try:
-            _, payload = _decode_operation(request.form, request.files)
+            result, payload = _decode_operation(request.form, request.files)
 
-            ext_out = ".bin"
-            if payload[:4] == b"\x89PNG":
-                ext_out = ".png"
-            elif payload[:2] == b"\xff\xd8":
-                ext_out = ".jpg"
-            elif payload[:4] == b"PK\x03\x04":
-                ext_out = ".zip"
-            elif payload[:4] == b"%PDF":
-                ext_out = ".pdf"
-            else:
-                try:
-                    payload.decode("utf-8")
-                    ext_out = ".txt"
-                except UnicodeDecodeError:
-                    pass
+            mime = result.get("detected_mime", "application/octet-stream")
+            dl_name = result.get("download_name", "decoded_payload.bin")
+
+            # For encrypted/opaque blobs, add a hint in the header
+            extra_headers = {}
+            if payload[:4] == b"SFRG":
+                extra_headers["X-StegoForge-Hint"] = (
+                    "Payload appears to be another StegoForge-encrypted blob. "
+                    "Use 'stegoforge decode' with the correct key to unwrap it."
+                )
 
             buf = io.BytesIO(payload)
             buf.seek(0)
-            return send_file(
+            response = send_file(
                 buf,
                 as_attachment=True,
-                download_name=f"decoded_payload{ext_out}",
-                mimetype="application/octet-stream",
+                download_name=dl_name,
+                mimetype=mime,
             )
+            for k, v in extra_headers.items():
+                response.headers[k] = v
+            return response
 
         except (ValueError, IOError) as e:
             return jsonify({"error": str(e)}), 400
         except Exception as e:
             return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
+
 
     @app.route("/detect", methods=["POST"])
     def detect():
@@ -526,14 +593,40 @@ def create_app():
                             extracted = extracted_path.read_bytes()
                             break
 
+            # Determine smart extension and MIME for extracted payload
+            extracted_ext = ".bin"
+            extracted_mime = "application/octet-stream"
+            extra_notes = list(report.get("notes", []))
+            if extracted is not None:
+                extracted_mime, extracted_ext = _detect_payload_type(extracted)
+                if extracted[:4] == b"SFRG":
+                    extra_notes.append(
+                        "⚠ Extracted payload starts with SFRG magic — this is a StegoForge "
+                        "AES-256-GCM encrypted blob. Use 'stegoforge decode -f <carrier> -k <key>' "
+                        "with the correct passphrase to decrypt it."
+                    )
+                else:
+                    extra_notes.append(
+                        "✔ Extracted raw payload successfully! The payload was embedded in plain text "
+                        "(no encryption key was used)."
+                    )
+            elif report.get("overall_verdict") == "STEGO DETECTED":
+                extra_notes.append(
+                    "ℹ Steganography was detected structurally/statistically, but the raw payload "
+                    "could not be blindly extracted. This usually happens if the payload was scattered "
+                    "using an adaptive method, or protected by an encryption key. You must use the 'Decode' tab."
+                )
+
             response = {
                 "file": filename,
                 "verdict": report.get("overall_verdict", "CLEAN"),
                 "confidence": report.get("overall_confidence", 0.0),
                 "results": report.get("results", []),
                 "has_extracted_payload": extracted is not None,
-                "notes": report.get("notes", []),
+                "notes": extra_notes,
                 "report_json": report,
+                "extracted_payload_ext": extracted_ext,
+                "extracted_payload_mime": extracted_mime,
             }
 
             if extracted:
@@ -543,6 +636,7 @@ def create_app():
 
         except Exception as e:
             return jsonify({"error": str(e)}), 500
+
 
     @app.route("/capacity", methods=["GET", "POST"])
     def capacity():
@@ -569,6 +663,37 @@ def create_app():
             result["file"] = filename
             return jsonify(result)
 
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/diff", methods=["POST"])
+    def diff():
+        try:
+            cover_file = request.files.get("cover")
+            stego_file = request.files.get("stego")
+            if not cover_file or not stego_file:
+                return jsonify({"error": "Both cover and stego files are required"}), 400
+
+            from stegoforge import op_diff
+            import base64
+
+            with tempfile.TemporaryDirectory(prefix="stegoforge_web_diff_") as td:
+                td_path = Path(td)
+                c_path = td_path / (cover_file.filename or "cover.bin")
+                s_path = td_path / (stego_file.filename or "stego.bin")
+                map_path = td_path / "heatmap.png"
+
+                c_path.write_bytes(cover_file.read())
+                s_path.write_bytes(stego_file.read())
+
+                result = op_diff(str(c_path), str(s_path), str(map_path))
+
+                if map_path.exists():
+                    img_bytes = map_path.read_bytes()
+                    b64 = base64.b64encode(img_bytes).decode("utf-8")
+                    result["heatmap_b64"] = f"data:image/png;base64,{b64}"
+
+            return jsonify(result)
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 

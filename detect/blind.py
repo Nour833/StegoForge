@@ -131,6 +131,47 @@ class BlindExtractor(BaseDetector):
                         "error": str(e),
                     },
                 )
+                
+            # NATIVE IMAGE BLIND EXTRACTION (Advanced Methods)
+            from stegoforge import get_encoder
+            for method_name in ["dct", "adaptive-lsb", "palette", "alpha"]:
+                try:
+                    encoder = get_encoder(method_name)
+                    raw_payload = encoder.decode(file_bytes)
+                    
+                    score = 0.0
+                    payload_type = "Unknown bin"
+                    if raw_payload.startswith(b"SFRG"):
+                        score = 1.0
+                        payload_type = "StegoForge encrypted payload"
+                    else:
+                        for magic, desc in KNOWN_MAGIC.items():
+                            if raw_payload.startswith(magic):
+                                score = 0.8
+                                payload_type = desc
+                                break
+                        if score == 0.0:
+                            try:
+                                text = raw_payload.decode("utf-8")
+                                if sum(1 for c in text if c.isprintable()) / max(1, len(text)) > 0.9:
+                                    score = 0.6
+                                    payload_type = "Text data"
+                            except UnicodeDecodeError:
+                                score = 0.1
+                                
+                    if score > 0.0:
+                        candidates.append({
+                            "channel": method_name,
+                            "depth": 1,
+                            "row_order": "normal",
+                            "channel_perm": None,
+                            "payload_bytes": len(raw_payload),
+                            "score": score,
+                            "payload_preview": _describe_payload(raw_payload),
+                            "payload": raw_payload,
+                        })
+                except Exception:
+                    pass
 
             has_alpha = (img.mode == "RGBA")
             channel_names = ["R", "G", "B"] + (["A"] if has_alpha else [])
@@ -140,9 +181,12 @@ class BlindExtractor(BaseDetector):
             # All RGB channel order permutations
             channel_permutations = list(itertools.permutations([0, 1, 2]))
 
-            for channel_name in channel_names:
-                ch_idx = CHANNELS[channel_name]
-                if ch_idx >= arr.shape[2] if len(arr.shape) == 3 else 0:
+            # Include an "ALL" channel (interleaved channels)
+            channel_names_to_try = channel_names + ["ALL"]
+
+            for channel_name in channel_names_to_try:
+                ch_idx = CHANNELS[channel_name] if channel_name in CHANNELS else None
+                if ch_idx is not None and (ch_idx >= arr.shape[2] if len(arr.shape) == 3 else ch_idx > 0):
                     continue
 
                 for depth in depths:
@@ -203,7 +247,7 @@ class BlindExtractor(BaseDetector):
     def _try_extract(
         self,
         arr: np.ndarray,
-        channel_idx: int,
+        channel_idx: int | None,
         depth: int,
         row_order: str,
         channel_perm: tuple | None,
@@ -212,16 +256,27 @@ class BlindExtractor(BaseDetector):
         Attempt extraction with given parameters.
         Returns (payload, confidence_score) or None if implausible.
         """
-        if len(arr.shape) == 3:
-            if channel_perm and channel_idx < 3:
-                reordered = arr[:, :, list(channel_perm)]
-                channel_data = reordered[:, :, channel_idx]
+        if channel_idx is None:
+            # Interleaved across all channels
+            if channel_perm and len(arr.shape) == 3 and arr.shape[2] >= 3:
+                channels = [arr[:, :, i] for i in range(arr.shape[2])]
+                reordered = [channels[channel_perm[0]], channels[channel_perm[1]], channels[channel_perm[2]]]
+                if arr.shape[2] > 3:
+                    reordered.extend(channels[3:])  # keep alpha if present
+                flat = np.dstack(reordered).flatten()
             else:
-                channel_data = arr[:, :, channel_idx]
+                flat = arr.flatten()
         else:
-            channel_data = arr
+            if len(arr.shape) == 3:
+                if channel_perm and channel_idx < 3:
+                    reordered = arr[:, :, list(channel_perm)]
+                    channel_data = reordered[:, :, channel_idx]
+                else:
+                    channel_data = arr[:, :, channel_idx]
+            else:
+                channel_data = arr
 
-        flat = channel_data.flatten()
+            flat = channel_data.flatten()
         if row_order == "reversed":
             flat = flat[::-1]
 

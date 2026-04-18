@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing tag to update (example: v1.0.0)"
+        description: "Existing tag to update (example: v1.1.0)"
         required: true
-        default: "v1.0.0"
+        default: "v1.1.0"
 
 permissions:
   contents: write
@@ -40,12 +40,29 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
 
       - name: Set up Python
         if: ${{ !matrix.is_linux }}
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
+
+      - name: Verify tag/version alignment
+        shell: bash
+        run: |
+          EXPECTED_TAG="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+          EXPECTED_VERSION="${EXPECTED_TAG#v}"
+          CODE_VERSION="$(python -c 'from core.version import __version__; print(__version__)')"
+
+          echo "Release tag: ${EXPECTED_TAG}"
+          echo "Code version: ${CODE_VERSION}"
+
+          if [ "${EXPECTED_VERSION}" != "${CODE_VERSION}" ]; then
+            echo "Tag/version mismatch: expected ${EXPECTED_VERSION}, found ${CODE_VERSION}"
+            exit 1
+          fi
 
       - name: Install system deps (Linux)
         if: ${{ matrix.is_linux }}

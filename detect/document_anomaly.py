@@ -41,9 +41,21 @@ class DocumentAnomalyDetector(BaseDetector):
         zw_ratio = zw / total_chars
         trailing_ratio = trailing / max(1, len(lines))
         conf = min(1.0, (zw_ratio * 45.0) + (trailing_ratio * 0.8))
-        detected = conf >= 0.35
+        
+        extracted = None
+        try:
+            from core.document.unicode_ws import UnicodeWSEncoder
+            extracted = UnicodeWSEncoder().decode(file_bytes)
+        except Exception:
+            pass
 
-        return DetectionResult(
+        if extracted is not None:
+            conf = 1.0
+            detected = True
+        else:
+            detected = conf >= 0.35
+
+        res = DetectionResult(
             method=self.name,
             detected=detected,
             confidence=round(conf, 4),
@@ -52,11 +64,13 @@ class DocumentAnomalyDetector(BaseDetector):
                 "zero_width_ratio": round(zw_ratio, 6),
                 "trailing_whitespace_lines": trailing,
                 "interpretation": (
-                    "Text contains suspicious invisible-character / whitespace patterns"
+                    "Text contains suspicious invisible-character / whitespace patterns OR payload extracted"
                     if detected else "No strong text stego anomaly pattern detected"
                 ),
             },
         )
+        res.extracted_payload = extracted
+        return res
 
     def _analyze_office_zip(self, file_bytes: bytes, ext: str) -> DetectionResult:
         findings = []
@@ -92,9 +106,26 @@ class DocumentAnomalyDetector(BaseDetector):
             suspicious += 0.08
 
         conf = min(1.0, suspicious)
-        detected = conf >= 0.35
+        
+        extracted = None
+        try:
+            from core.document.office import OfficeEncoder
+            extracted = OfficeEncoder().decode(file_bytes)
+        except Exception:
+            pass
+            
+        if extracted is not None:
+            conf = 1.0
+            findings.insert(0, {
+                "field": "Office Container",
+                "description": "Valid StegoForge payload explicitly extracted from Document container!",
+                "suspicion": "high"
+            })
+            detected = True
+        else:
+            detected = conf >= 0.35
 
-        return DetectionResult(
+        res = DetectionResult(
             method=self.name,
             detected=detected,
             confidence=round(conf, 4),
@@ -105,9 +136,11 @@ class DocumentAnomalyDetector(BaseDetector):
                 "has_embeddings": has_embeddings,
                 "has_vba_project": has_vba,
                 "interpretation": (
-                    "Office container includes potentially covert-bearing streams"
+                    "Office container includes potentially covert-bearing streams OR payload extracted"
                     if detected else "No strong Office container anomaly pattern detected"
                 ),
             },
             findings=findings,
         )
+        res.extracted_payload = extracted
+        return res
