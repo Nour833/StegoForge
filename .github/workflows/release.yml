@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing tag to update (example: v1.1.4)"
+        description: "Existing tag to update (example: v1.1.5)"
         required: true
-        default: "v1.1.4"
+        default: "v1.1.5"
 
 permissions:
   contents: write
@@ -138,7 +138,7 @@ jobs:
           Priority: optional
           Architecture: all
           Homepage: https://github.com/nour833/StegoForge
-          Depends: python3, python3-pip, python3-numpy, python3-scipy, python3-pil, python3-cryptography
+          Depends: python3, python3-pip, python3-numpy, python3-scipy, python3-pil, python3-cryptography, python3-typer, python3-rich, python3-flask, python3-flask-cors, python3-pydub, python3-argon2, python3-docx, python3-openpyxl, python3-pypdf, python3-av, python3-scapy, python3-certifi, python3-requests
           Maintainer: StegoForge <nourelislem84@outlook.fr>
           Description: The most complete open-source steganography toolkit.
            This is the native, lightweight distribution of StegoForge.

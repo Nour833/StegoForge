@@ -1,8 +1,8 @@
 # UTF-8
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(1, 1, 4, 0),
-    prodvers=(1, 1, 4, 0),
+    filevers=(1, 1, 5, 0),
+    prodvers=(1, 1, 5, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -17,12 +17,12 @@ VSVersionInfo(
         '040904B0',
         [StringStruct('CompanyName', 'StegoForge'),
         StringStruct('FileDescription', 'StegoForge Toolkit'),
-        StringStruct('FileVersion', '1.1.4'),
+        StringStruct('FileVersion', '1.1.5'),
         StringStruct('InternalName', 'stegoforge'),
         StringStruct('LegalCopyright', 'Copyright 2026'),
         StringStruct('OriginalFilename', 'stegoforge.exe'),
         StringStruct('ProductName', 'StegoForge'),
-        StringStruct('ProductVersion', '1.1.4')])
+        StringStruct('ProductVersion', '1.1.5')])
       ]), 
     VarFileInfo([VarStruct('Translation', [1033, 1200])])
   ]

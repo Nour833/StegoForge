@@ -5,6 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.5] — 2026-04-26
+
+### 🛠️ Bug Fixes & Improvements
+- **Debian Package Fix**: Added missing system dependencies (`python3-typer`, `python3-rich`, etc.) to the `.deb` package to prevent startup crashes on fresh Ubuntu/Debian installs.
+
+---
+
 ## [1.1.4] — 2026-04-26
 
 ### 🚀 Distribution & CI/CD Enhancements
@@ -126,6 +133,7 @@ PRNU/Fingerprint · Binary slack · Survival simulator
 - Web UI: glassmorphism dark theme, SSE streaming, capacity matrix
 - Auto-update via GitHub releases
 
+[1.1.5]: https://github.com/nourali460/StegoForge/releases/tag/v1.1.5
 [1.1.4]: https://github.com/nourali460/StegoForge/releases/tag/v1.1.4
 [1.1.0]: https://github.com/nourali460/StegoForge/releases/tag/v1.1.0
 [1.0.0]: https://github.com/nourali460/StegoForge/releases/tag/v1.0.0
