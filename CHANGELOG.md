@@ -5,6 +5,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.2] — 2026-04-26
+
+### 🚀 Distribution & CI/CD Enhancements
+- **Native Debian Support**: Implemented a lightweight, zero-dependency `.deb` package generation workflow directly via GitHub Actions.
+- **PyPI Publishing**: Added automated `sdist` and `wheel` distribution publishing to the Python Package Index.
+- **Debian Standards Compliance**: Included `copyright` (LICENSE) and `README.md` documents directly in the `.deb` under `/usr/share/doc/stegoforge/` to comply with strict Debian/Kali Linux packaging policies.
+- **Arch Linux Compatibility**: Updated the internal installation-kind detector to properly handle Arch's `/usr/lib/` packaging structures without flagging as a raw PIP install, preventing package manager conflicts.
+- **Smart Updater Improvements**: Hardened the auto-updater to correctly recognize `apt` and system-managed installs (`system-package`), gracefully prompting users to update via their system package manager instead of `pip`.
+
+---
+
 ## [1.1.0] — 2026-04-17
 
 ### 🚀 New CLI Commands
@@ -113,5 +124,6 @@ PRNU/Fingerprint · Binary slack · Survival simulator
 - Web UI: glassmorphism dark theme, SSE streaming, capacity matrix
 - Auto-update via GitHub releases
 
+[1.1.2]: https://github.com/nourali460/StegoForge/releases/tag/v1.1.2
 [1.1.0]: https://github.com/nourali460/StegoForge/releases/tag/v1.1.0
 [1.0.0]: https://github.com/nourali460/StegoForge/releases/tag/v1.0.0

@@ -1,0 +1,6 @@
+include requirements.txt
+include requirements-web.txt
+include version_info.txt
+recursive-include web/templates *
+recursive-include web/static *
+recursive-include models *

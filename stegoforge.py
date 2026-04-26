@@ -252,6 +252,10 @@ def _detect_install_kind() -> str:
     if (repo_root / ".git").exists():
         return "source-checkout"
 
+    repo_path_str = str(repo_root)
+    if (repo_path_str.startswith("/usr/") and not repo_path_str.startswith("/usr/local/")) or repo_path_str.startswith("/opt/"):
+        return "system-package"
+
     return "python-package"
 
 
@@ -263,6 +267,9 @@ def _manual_update_command(install_kind: str) -> str:
     if install_kind == "python-package":
         py_exec = Path(sys.executable).resolve()
         return f'"{py_exec}" -m pip install --upgrade stegoforge'
+
+    if install_kind == "system-package":
+        return "Download the latest .deb from GitHub Releases or update via your system package manager (e.g. apt upgrade stegoforge)."
 
     return ""
 

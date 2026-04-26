@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing tag to update (example: v1.1.0)"
+        description: "Existing tag to update (example: v1.1.2)"
         required: true
-        default: "v1.1.0"
+        default: "v1.1.2"
 
 permissions:
   contents: write
@@ -99,10 +99,68 @@ jobs:
           path: dist/${{ matrix.asset_name }}
           if-no-files-found: error
 
+  build-deb:
+    name: Build lightweight Debian package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Build deb
+        run: |
+          VERSION=$(python3 -c 'from core.version import __version__; print(__version__)')
+          DEB_NAME="stegoforge_${VERSION}_all"
+          BUILD_DIR="${RUNNER_TEMP}/${DEB_NAME}"
+          
+          mkdir -p "${BUILD_DIR}/DEBIAN"
+          mkdir -p "${BUILD_DIR}/usr/share/stegoforge"
+          mkdir -p "${BUILD_DIR}/usr/bin"
+          mkdir -p "${BUILD_DIR}/usr/share/doc/stegoforge"
+          
+          cp -r core detect models protocol web stegoforge.py requirements.txt requirements-web.txt version_info.txt setup.py "${BUILD_DIR}/usr/share/stegoforge/"
+          chmod +x "${BUILD_DIR}/usr/share/stegoforge/stegoforge.py"
+          ln -s /usr/share/stegoforge/stegoforge.py "${BUILD_DIR}/usr/bin/stegoforge"
+          
+          cp LICENSE "${BUILD_DIR}/usr/share/doc/stegoforge/copyright"
+          cp README.md "${BUILD_DIR}/usr/share/doc/stegoforge/README.md"
+          
+          cat <<EOF > "${BUILD_DIR}/DEBIAN/control"
+          Package: stegoforge
+          Version: ${VERSION}
+          Section: utils
+          Priority: optional
+          Architecture: all
+          Homepage: https://github.com/nour833/StegoForge
+          Depends: python3, python3-pip, python3-numpy, python3-scipy, python3-pil, python3-cryptography
+          Maintainer: StegoForge <nourelislem84@outlook.fr>
+          Description: The most complete open-source steganography toolkit.
+           This is the native, lightweight distribution of StegoForge.
+           It relies on system-provided Python libraries where possible,
+           making it ideal for environments like Kali Linux and Debian.
+          EOF
+          
+          dpkg-deb --build "${BUILD_DIR}"
+          mv "${RUNNER_TEMP}/${DEB_NAME}.deb" ./
+          ls -lh *.deb
+
+      - name: Upload deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: stegoforge-deb
+          path: "*.deb"
+          if-no-files-found: error
+
   release:
     name: Update release assets
     runs-on: ubuntu-latest
-    needs: build
+    needs: [build, build-deb]
     steps:
       - name: Resolve release tag
         id: tag
@@ -126,6 +184,7 @@ jobs:
           test -f release-assets/stegoforge-linux-x86_64
           test -f release-assets/stegoforge-windows-x86_64.exe
           test -f release-assets/stegoforge-macos-arm64
+          test -n "$(find release-assets -name '*.deb')"
 
       - name: Publish assets to release
         uses: softprops/action-gh-release@v2
@@ -135,6 +194,7 @@ jobs:
             release-assets/stegoforge-linux-x86_64
             release-assets/stegoforge-windows-x86_64.exe
             release-assets/stegoforge-macos-arm64
+            release-assets/*.deb
           overwrite_files: true
           fail_on_unmatched_files: true
           generate_release_notes: false
