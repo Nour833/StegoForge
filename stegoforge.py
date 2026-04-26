@@ -2897,7 +2897,7 @@ def cmd_web(
     except ImportError:
         console.print(
             f"[{C_ERROR}][ERROR][/{C_ERROR}] Web dependencies not installed.\n"
-            "Run: pip install -r requirements-web.txt"
+            "Run: pip install flask flask-cors"
         )
         raise typer.Exit(1)
     except (ValueError, IOError, OSError) as e:

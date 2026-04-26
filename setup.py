@@ -21,7 +21,10 @@ setup(
     include_package_data=True,
     py_modules=["stegoforge"],
     python_requires=">=3.10",
-    install_requires=open("requirements.txt").read().splitlines(),
+    install_requires=(
+        open("requirements.txt").read().splitlines() + 
+        open("requirements-web.txt").read().splitlines()
+    ),
     project_urls={
         "Source": "https://github.com/nour833/StegoForge",
         "Bug Tracker": "https://github.com/nour833/StegoForge/issues",
