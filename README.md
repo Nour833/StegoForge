@@ -1,6 +1,5 @@
-
 <div align="center">
-  <img src="interface.gif" alt="StegoForge Dashboard" width="850">
+  <img src="https://raw.githubusercontent.com/Nour833/StegoForge/main/interface.gif" alt="StegoForge Dashboard" width="850">
 
   # 🛡️ StegoForge
   **The ultimate hybrid of steganography, digital forensics, and covert communications.**
