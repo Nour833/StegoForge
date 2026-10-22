@@ -20,7 +20,7 @@
 
 ## Why StegoForge
 
-- **Both sides of the problem.** Embed a payload *and* analyse a suspicious file with the same tool: 20 embedding methods, 7 core detectors, one-command CTF mode.
+- **Both sides of the problem.** Embed a payload *and* analyse a suspicious file with the same tool: 20 embedding methods, 11 detectors, one-command CTF mode.
 - **Encrypted before it is hidden.** Every payload is sealed with AES-256-GCM under an Argon2id key. A payload that is found still cannot be read without the passphrase.
 - **Honest about limits.** Steganography is statistical, not magic. Detectors say *inconclusive* when they cannot tell, docs list what each method does **not** survive, and measured numbers are published with their error bars ([`docs/DETECTOR-EVAL.md`](docs/DETECTOR-EVAL.md)).
 - **Local by default.** The web UI listens on loopback only and makes no request to any third party; `--offline` switches the network off entirely; StegoForge never downloads an executable or a model.
