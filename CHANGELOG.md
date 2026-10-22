@@ -5,6 +5,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+- Debian package: `python3-reedsolo` is now a hard dependency (wet-paper error correction needs it and `stegoforge doctor` lists it as required); it was only recommended, so a minimal install reported a missing required package.
+
+### Changed
+- The Debian job in CI and in the release workflow installs only the hard dependencies, with retries, a lock timeout and a job time limit; the optional extras (`ffmpeg` alone pulls in about 100 packages) made it depend on the package mirror.
+
+---
+
 ## [1.5.0] — 2026-10-22
 
 Major release: correctness overhaul, security hardening, architecture

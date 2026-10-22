@@ -156,6 +156,7 @@ jobs:
   deb:
     name: Debian package
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: [test]
     steps:
       - uses: actions/checkout@v4
@@ -171,7 +172,10 @@ jobs:
       - name: Install it with apt (resolves Depends on this distribution) and run it
         run: |
           sudo apt-get update
-          sudo apt-get install -y ./dist-deb/stegoforge_*.deb
+          # Hard dependencies only: the optional extras (ffmpeg alone pulls in ~100 packages) are not needed here and
+          # made this step depend on the mirror's mood. Retries and a lock timeout cover the rest.
+          sudo apt-get install -y --no-install-recommends -o Acquire::Retries=3 -o DPkg::Lock::Timeout=120 \
+            ./dist-deb/stegoforge_*.deb
           cd "$(mktemp -d)"
           stegoforge --help >/dev/null
           stegoforge doctor

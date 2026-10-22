@@ -50,8 +50,8 @@ PIP_TO_DEB: dict[str, str | None] = {
     "imageio-ffmpeg": None,  # the `ffmpeg` package is recommended instead
 }
 DEPENDS = ["python3 (>= 3.10)", "python3-numpy", "python3-scipy", "python3-pil", "python3-cryptography",
-           "python3-argon2", "python3-typer", "python3-rich", "python3-certifi"]
-RECOMMENDS = ["python3-reedsolo", "python3-pypdf", "python3-lxml", "python3-piexif", "python3-flask", "python3-flask-cors",
+           "python3-argon2", "python3-typer", "python3-rich", "python3-certifi", "python3-reedsolo"]
+RECOMMENDS = ["python3-pypdf", "python3-lxml", "python3-piexif", "python3-flask", "python3-flask-cors",
               "python3-av", "ffmpeg"]
 SUGGESTS = ["python3-scapy", "python3-onnxruntime"]
 
