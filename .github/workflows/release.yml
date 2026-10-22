@@ -169,7 +169,7 @@ jobs:
           test -n "$(find release-assets -name '*.deb')"
 
       - name: Publish assets to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.tag.outputs.value }}
           files: |
