@@ -22,8 +22,8 @@ jobs:
       matrix:
         python-version: ["3.10", "3.12"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -56,7 +56,7 @@ jobs:
     name: Lint, types, audit, build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Commits carry a real author (GitHub attributes by e-mail)
@@ -68,7 +68,7 @@ jobs:
             echo "Fix with: git rebase -r <base> --exec 'git commit --amend --no-edit --reset-author'"
             exit 1
           fi
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.10"
           cache: pip
@@ -86,7 +86,7 @@ jobs:
           python scripts/make_sbom.py > sbom.cdx.json
           python -c "import json; d=json.load(open('sbom.cdx.json')); assert d['bomFormat']=='CycloneDX'; print(len(d['components']), 'components')"
       - name: Upload SBOM
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sbom-cdx
           path: sbom.cdx.json
@@ -123,8 +123,8 @@ jobs:
     name: Dependency audit (Python 3.12)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       # Resolved on 3.12 on purpose: Pillow 13 (which fixes 24 advisories in 12.3.0) needs Python >= 3.11,
@@ -137,7 +137,7 @@ jobs:
   docker:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build Docker image
         run: docker build -t stegoforge:ci .
       - name: Docker smoke (schema, doctor; offline)
@@ -159,8 +159,8 @@ jobs:
     timeout-minutes: 15
     needs: [test]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.10"
       - name: Build the .deb
