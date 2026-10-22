@@ -86,7 +86,7 @@ jobs:
           python scripts/make_sbom.py > sbom.cdx.json
           python -c "import json; d=json.load(open('sbom.cdx.json')); assert d['bomFormat']=='CycloneDX'; print(len(d['components']), 'components')"
       - name: Upload SBOM
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sbom-cdx
           path: sbom.cdx.json
