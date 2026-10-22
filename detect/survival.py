@@ -163,7 +163,7 @@ def simulate_platform_pipeline(file_bytes: bytes, filename: str, profile: Platfo
     if max(img.size) > max_dim:
         ratio = max_dim / float(max(img.size))
         resized = (max(1, int(img.size[0] * ratio)), max(1, int(img.size[1] * ratio)))
-        img = img.resize(resized, Image.LANCZOS)
+        img = img.resize(resized, Image.Resampling.LANCZOS)
 
     out = io.BytesIO()
     output_ext = ext

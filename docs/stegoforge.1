@@ -1,0 +1,117 @@
+.TH STEGOFORGE 1 "2026-10-22" "StegoForge 1.5.0" "User Commands"
+.SH NAME
+stegoforge \- steganography toolkit (encode/decode/detect/ctf/capacity/diff/batch/web)
+.SH SYNOPSIS
+.B stegoforge encode -c CARRIER -p PAYLOAD [-k KEY | --key-file F] [--allow-plaintext] [--pad-to N] [--require-v2] [--enforce-strong-pass] [--no-magic] [--depth 1-4] [--method M] [--wet-paper] [--target T] [--test-survival] [--decoy D --decoy-key K]
+.br
+.B stegoforge decode -f STEGO [-k KEY | --key-file F] [--method M] [--require-v2] [--wet-paper]
+.br
+.B stegoforge detect -f FILE [--chi2] [--rs] [--exif] [--blind] [--ml] [--fingerprint] [--binary] [--all] [--case-id ID] [--stdin]
+.br
+.B stegoforge ctf -f FILE [--batch DIR] [--no-save] [--output-dir D] [--case-id ID] [--stdin]
+.br
+.B stegoforge capacity -c CARRIER [--method M] [--depth N]
+.br
+.B stegoforge diff -c COVER -s STEGO [--save-heatmap P]
+.br
+.B stegoforge batch -d DIR -p PAYLOAD -k KEY [--jobs N] [--method M] [--depth N]
+.br
+.B stegoforge survive -c CARRIER -p PAYLOAD -k KEY --target T
+.br
+.B stegoforge web [--port N] [--host H]
+.br
+.B stegoforge deadrop post -c C -p P -k K [--upload-url U]
+.br
+.B stegoforge deadrop check --url U -k K
+.br
+.B stegoforge deadrop monitor --url U -k K [--interval S]
+.br
+.B stegoforge deadrop keyx initiate -c C -o OUT [--local-passphrase P] [--sign-key-file F]
+.br
+.B stegoforge deadrop keyx complete -f F [--local-passphrase P] [--verify-key-file F] [--output-key-file O] [--legacy-v1]
+.br
+.B stegoforge schema [NAME] [--json]
+.br
+.B stegoforge completion [bash|zsh|fish]
+.br
+.B stegoforge init
+.br
+.B stegoforge doctor [--json]
+.br
+.B stegoforge update [--check-only] [-y]
+.SH DESCRIPTION
+StegoForge hides encrypted payloads in image, audio, video, document, and
+binary carriers, and provides forensic detectors for CTF and research use.
+Encryption is AES-256-GCM with Argon2id (v2 method-bound AAD by default;
+legacy v1 still decodes unless
+.B --require-v2
+is given). Without a key, encoding is refused unless
+.B --allow-plaintext
+.RB ( or
+.BR --no-encrypt )
+is passed. See docs/API.md, docs/PROTOCOL.md, docs/METHODS.md, docs/ERRORS.md.
+.PP
+Exit status is 0 on success, 1 on usage/operation errors (JSON mode prints
+{"status": "error", ...}).
+.SH OPTIONS
+.TP
+.BR -k ", " --key
+Passphrase. Visible in process list; prefer
+.B --key-file
+or the STEGOFORGE_KEY environment variable.
+.TP
+.B --key-file F
+Read passphrase from file F.
+.TP
+.B --pad-to N
+Pad plaintext to N-byte blocks (1-256) before encryption.
+.TP
+.B --no-magic
+Use a key-derived header instead of the static SFRG magic (encode only;
+incompatible with decoy mode).
+.TP
+.B --i-understand-root
+Acknowledge authorization for live network covert-channel operations.
+.TP
+.B --no-save
+CTF triage without writing extracted payloads (read-only forensics).
+.TP
+.B --case-id ID
+Forensic case identifier recorded in detect/ctf reports.
+.TP
+.B --offline
+Skip network bootstrap (same as STEGOFORGE_OFFLINE=1).
+.SH ENVIRONMENT
+.TP
+.B STEGOFORGE_KEY
+Key fallback (inherited by child processes; prefer --key-file).
+.TP
+.B STEGOFORGE_ALLOW_PLAINTEXT
+Set to 1 to allow keyless embeds without --allow-plaintext.
+.TP
+.B STEGOFORGE_WEB_TOKEN
+Require token for web UI (use value "auto" for a per-boot token on stderr).
+.TP
+.B STEGOFORGE_OFFLINE / STEGOFORGE_OFFLINE_FONTS
+Skip bootstrap / remote fonts.
+.TP
+.B STEGOFORGE_UPDATE_SHA256 / STEGOFORGE_UPDATE_SIG_URL / STEGOFORGE_UPDATE_UNPINNED
+Self-update verification pins.
+.TP
+.B STEGOFORGE_MODEL_SHA256 / STEGOFORGE_FFMPEG_SHA256
+Asset integrity pins.
+.TP
+.B STEGOFORGE_LLM_TOKEN / STEGOFORGE_ALLOW_PRIVATE_LLM
+Linguistic LLM auth / private-endpoint opt-in.
+.TP
+.B STEGOFORGE_I_UNDERSTAND_ROOT
+Non-interactive equivalent of --i-understand-root.
+.SH FILES
+.I ~/.stegoforge/bin, ~/.stegoforge/models
+(asset cache),
+.I stegoforge_ops/schemas/json-schema.json
+(machine schemas),
+.I assets.sha256
+(release asset hashes).
+.SH SEE ALSO
+docs/API.md, docs/PROTOCOL.md, docs/THREAT-MODEL.md, docs/OPENAPI.md

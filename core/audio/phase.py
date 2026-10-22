@@ -1,155 +1,99 @@
 """
-core/audio/phase.py — Phase coding steganography for audio.
+core/audio/phase.py — phase-coding steganography for audio.
 
-Uses Python stdlib wave + numpy for Python 3.14 compatibility.
-Encodes payload by adding small phase shifts (±π/2) to specific
-frequency bins in fixed-size audio segments.
+The (mono-mixed) signal is cut into fixed 1024-sample segments. Each segment
+carries one bit in the *phase* of FFT bin 256 (11 kHz at 44.1 kHz): +pi/2 for a
+1, -pi/2 for a 0. The conjugate bin is set too, so the segment stays real.
 
-Wire format: [4-byte big-endian length][payload bytes]
+Why a magnitude floor: in a silent segment the bin has magnitude 0, so any
+phase written to it vanishes and the bit is lost. The bin is therefore raised
+to at least ``MAGNITUDE_FLOOR`` — a tone of about one 16-bit LSB, far above the
+int16 rounding noise and inaudible — so the bit survives quantisation even in
+digital silence.
+
+Output is always 16-bit mono WAV. Capacity is one bit per 1024 samples, so
+this method suits short messages.
+
+Wire format: ``[4-byte big-endian length][payload]``.
 """
-import io
-import struct
-import wave
+from __future__ import annotations
+
 import numpy as np
 
 from core.audio._convert import decode_audio_to_wav
+from core.audio.mono import float_to_wav_mono, wav_to_float_mono
 from core.base import BaseEncoder
+from core.bits import bits_to_bytes_np, bytes_to_bits_np, validate_payload_not_empty
 
-HEADER_FMT = ">I"
 HEADER_SIZE = 4
+MAX_PAYLOAD = 100_000_000
 SEGMENT_SIZE = 1024
+BIN = SEGMENT_SIZE // 4
+MIRROR_BIN = SEGMENT_SIZE - BIN
 PHASE_SHIFT = np.pi / 2
-
-
-def _wav_to_float_mono(data: bytes) -> tuple[np.ndarray, dict]:
-    """Read WAV → mono float32 samples in [-1, 1], plus params."""
-    buf = io.BytesIO(data)
-    with wave.open(buf) as wf:
-        params = {
-            "nchannels": wf.getnchannels(),
-            "sampwidth": wf.getsampwidth(),
-            "framerate": wf.getframerate(),
-            "nframes": wf.getnframes(),
-        }
-        raw = wf.readframes(wf.getnframes())
-
-    if params["sampwidth"] == 2:
-        samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32)
-        # Convert stereo to mono if needed
-        if params["nchannels"] == 2:
-            samples = samples.reshape(-1, 2).mean(axis=1)
-        samples /= 32768.0
-    elif params["sampwidth"] == 1:
-        samples = np.frombuffer(raw, dtype=np.uint8).astype(np.float32)
-        if params["nchannels"] == 2:
-            samples = samples.reshape(-1, 2).mean(axis=1)
-        samples = (samples - 128.0) / 128.0
-    else:
-        samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-        if params["nchannels"] == 2:
-            samples = samples.reshape(-1, 2).mean(axis=1)
-
-    return samples, params
-
-
-def _float_to_wav(samples: np.ndarray, params: dict) -> bytes:
-    """Write float32 mono samples back to WAV."""
-    out_int16 = np.clip(samples * 32768, -32768, 32767).astype(np.int16)
-    buf = io.BytesIO()
-    with wave.open(buf, 'w') as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(params["framerate"])
-        wf.writeframes(out_int16.tobytes())
-    return buf.getvalue()
+# FFT-bin magnitude of ~1 LSB tone (amplitude 2*0.02/1024 ≈ 3.9e-5 of full scale);
+# int16 rounding noise in the bin is ~2.8e-4, i.e. a >70x margin.
+MAGNITUDE_FLOOR = 0.02
+_CHUNK_SEGMENTS = 4096
 
 
 class PhaseEncoder(BaseEncoder):
     name = "phase"
     supported_extensions = [".wav", ".flac", ".mp3", ".ogg"]
 
+    def output_suffix(self, carrier_suffix: str) -> str:
+        return ".wav"
+
     def capacity(self, carrier_bytes: bytes, ext: str = ".wav", **kwargs) -> int:
-        wav_bytes = decode_audio_to_wav(carrier_bytes, ext)
-        samples, _ = _wav_to_float_mono(wav_bytes)
-        n_segments = len(samples) // SEGMENT_SIZE
-        return (n_segments // 8) - HEADER_SIZE
+        samples, _ = wav_to_float_mono(decode_audio_to_wav(carrier_bytes, ext))
+        return max(0, (len(samples) // SEGMENT_SIZE) // 8 - HEADER_SIZE)
 
     def encode(self, carrier_bytes: bytes, payload_bytes: bytes, ext: str = ".wav", **kwargs) -> bytes:
-        wav_bytes = decode_audio_to_wav(carrier_bytes, ext)
-        samples, params = _wav_to_float_mono(wav_bytes)
+        validate_payload_not_empty(payload_bytes)
+        samples, params = wav_to_float_mono(decode_audio_to_wav(carrier_bytes, ext))
         n_segments = len(samples) // SEGMENT_SIZE
-
-        cap = (n_segments // 8) - HEADER_SIZE
+        cap = max(0, n_segments // 8 - HEADER_SIZE)
         if len(payload_bytes) > cap:
-            raise ValueError(
-                f"Payload too large: {len(payload_bytes)} bytes, phase capacity: {cap} bytes"
-            )
+            raise ValueError(f"Payload too large: {len(payload_bytes)} bytes, phase capacity: {cap} bytes")
 
-        data = struct.pack(HEADER_FMT, len(payload_bytes)) + payload_bytes
-        bits = _bytes_to_bits(data)
+        bits = bytes_to_bits_np(len(payload_bytes).to_bytes(HEADER_SIZE, "big") + bytes(payload_bytes))
+        out = samples.copy()
+        for first in range(0, len(bits), _CHUNK_SEGMENTS):
+            chunk = bits[first:first + _CHUNK_SEGMENTS]
+            lo = first * SEGMENT_SIZE
+            segs = samples[lo:lo + len(chunk) * SEGMENT_SIZE].reshape(len(chunk), SEGMENT_SIZE).astype(np.float64)
+            spectrum = np.fft.fft(segs, axis=1)
+            magnitude = np.maximum(np.abs(spectrum[:, BIN]), MAGNITUDE_FLOOR)
+            bin_value = magnitude * np.exp(1j * np.where(chunk == 1, PHASE_SHIFT, -PHASE_SHIFT))
+            spectrum[:, BIN] = bin_value
+            spectrum[:, MIRROR_BIN] = np.conj(bin_value)
+            out[lo:lo + len(chunk) * SEGMENT_SIZE] = np.fft.ifft(spectrum, axis=1).real.reshape(-1)
 
-        result_samples = samples.copy()
-        for seg_idx, bit in enumerate(bits):
-            if seg_idx >= n_segments:
-                break
-            start = seg_idx * SEGMENT_SIZE
-            segment = samples[start:start + SEGMENT_SIZE]
-
-            spectrum = np.fft.fft(segment)
-            bin_idx = SEGMENT_SIZE // 4
-
-            magnitude = np.abs(spectrum[bin_idx])
-            target_phase = PHASE_SHIFT if bit == 1 else -PHASE_SHIFT
-
-            spectrum[bin_idx] = magnitude * np.exp(1j * target_phase)
-            spectrum[SEGMENT_SIZE - bin_idx] = magnitude * np.exp(-1j * target_phase)
-
-            modified = np.fft.ifft(spectrum).real
-            result_samples[start:start + SEGMENT_SIZE] = modified
-
-        return _float_to_wav(result_samples, params)
+        stego = float_to_wav_mono(out, params["framerate"])
+        # Never report success on a payload that quantisation destroyed.
+        if self.decode(stego) != bytes(payload_bytes):
+            raise ValueError("Phase embedding did not survive 16-bit quantisation for this carrier")
+        return stego
 
     def decode(self, stego_bytes: bytes, ext: str = ".wav", **kwargs) -> bytes:
-        wav_bytes = decode_audio_to_wav(stego_bytes, ext)
-        samples, _ = _wav_to_float_mono(wav_bytes)
+        samples, _ = wav_to_float_mono(decode_audio_to_wav(stego_bytes, ext))
         n_segments = len(samples) // SEGMENT_SIZE
-
-        bits = []
-        for seg_idx in range(n_segments):
-            start = seg_idx * SEGMENT_SIZE
-            segment = samples[start:start + SEGMENT_SIZE]
-            spectrum = np.fft.fft(segment)
-            bin_idx = SEGMENT_SIZE // 4
-            phase = np.angle(spectrum[bin_idx])
-            bits.append(1 if phase > 0 else 0)
-
-        if len(bits) < HEADER_SIZE * 8:
+        if n_segments < HEADER_SIZE * 8:
             raise ValueError("Not enough segments to read phase header")
 
-        length = struct.unpack(HEADER_FMT, _bits_to_bytes(bits[:HEADER_SIZE * 8]))[0]
-        if length == 0 or length > 100_000_000:
+        def read(count: int) -> np.ndarray:
+            parts = []
+            for first in range(0, count, _CHUNK_SEGMENTS):
+                n = min(_CHUNK_SEGMENTS, count - first)
+                lo = first * SEGMENT_SIZE
+                segs = samples[lo:lo + n * SEGMENT_SIZE].reshape(n, SEGMENT_SIZE).astype(np.float64)
+                parts.append((np.angle(np.fft.fft(segs, axis=1)[:, BIN]) > 0).astype(np.uint8))
+            return np.concatenate(parts) if parts else np.empty(0, dtype=np.uint8)
+
+        length = int.from_bytes(bits_to_bytes_np(read(HEADER_SIZE * 8)), "big")
+        if length == 0 or length > MAX_PAYLOAD:
             raise ValueError(f"Invalid phase payload length: {length}")
-
         total_bits = (HEADER_SIZE + length) * 8
-        if len(bits) < total_bits:
+        if n_segments < total_bits:
             raise ValueError("Not enough audio segments to decode phase payload")
-
-        return _bits_to_bytes(bits[HEADER_SIZE * 8:total_bits])
-
-
-def _bytes_to_bits(data: bytes) -> list[int]:
-    bits = []
-    for byte in data:
-        for i in range(7, -1, -1):
-            bits.append((byte >> i) & 1)
-    return bits
-
-
-def _bits_to_bytes(bits: list[int]) -> bytes:
-    result = []
-    for i in range(0, len(bits) - 7, 8):
-        val = 0
-        for b in bits[i:i + 8]:
-            val = (val << 1) | b
-        result.append(val)
-    return bytes(result)
+        return bits_to_bytes_np(read(total_bits)[HEADER_SIZE * 8:])

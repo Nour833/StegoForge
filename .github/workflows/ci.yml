@@ -1,0 +1,184 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Least privilege: nothing here needs to write to the repository.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-web.txt
+          pip install pytest==9.1.1 setuptools==80.9.0
+      - name: Tests
+        run: python -m pytest tests/ -q
+      - name: Round-trip matrix (depths 1-4 + corruption)
+        run: |
+          python - <<'PY'
+          import io
+          from PIL import Image
+          from core.image.lsb import LSBEncoder
+          def png():
+              img=Image.new("RGB",(64,64),(10,20,30))
+              b=io.BytesIO(); img.save(b,format="PNG"); return b.getvalue()
+          c=png()
+          for depth in (1,2,3,4):
+              for plen in (5,21,22):
+                  data=b'X'*plen
+                  s=LSBEncoder().encode(c,data,depth=depth)
+                  assert LSBEncoder().decode(s,depth=depth)==data, (depth,plen)
+          print("roundtrip matrix ok")
+          PY
+
+  quality:
+    name: Lint, types, audit, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Commits carry a real author (GitHub attributes by e-mail)
+        if: github.event_name == 'pull_request'
+        run: |
+          bad="$(git log --format='%h %ae' "${{ github.event.pull_request.base.sha }}..HEAD" | grep -E '@(localhost|example\.(com|org))$|^[0-9a-f]+ *$' || true)"
+          if [ -n "$bad" ]; then
+            echo "Placeholder or missing author e-mail on:"; echo "$bad"
+            echo "Fix with: git rebase -r <base> --exec 'git commit --amend --no-edit --reset-author'"
+            exit 1
+          fi
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-web.txt
+          pip install ruff==0.17.1 mypy==2.4.0 build twine
+      - name: Lint
+        run: ruff check core detect protocol web stegoforge.py stegoforge_ops scripts
+      - name: Typecheck
+        run: mypy core detect protocol stegoforge_ops --ignore-missing-imports
+      - name: SBOM (CycloneDX)
+        run: |
+          python scripts/make_sbom.py > sbom.cdx.json
+          python -c "import json; d=json.load(open('sbom.cdx.json')); assert d['bomFormat']=='CycloneDX'; print(len(d['components']), 'components')"
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-cdx
+          path: sbom.cdx.json
+      - name: Every encoder is importable and the bundled assets exist
+        run: |
+          python - <<'PY'
+          from stegoforge import get_encoder
+          for m in ["lsb","adaptive-lsb","fingerprint-lsb","dct","alpha","palette",
+                    "audio-lsb","phase","spectrogram","unicode","linguistic","pdf",
+                    "docx","xlsx","office","elf","pe","video-dct","video-motion",
+                    "tcp-covert","timing-covert"]:
+              get_encoder(m)
+          from pathlib import Path
+          assert Path("web/templates/index.html").exists()
+          assert Path("models/model_quantized.onnx").exists()
+          assert Path("assets.sha256").exists()
+          print("assets ok")
+          PY
+      - name: Build sdist + wheel
+        run: |
+          python -m build
+          twine check dist/*
+      - name: Distributions contain the program (package, model, web assets)
+        run: python scripts/check_dist.py dist/*
+      - name: The wheel installs and runs in a clean environment
+        run: |
+          python -m venv /tmp/clean
+          /tmp/clean/bin/pip install --quiet dist/*.whl
+          cd "$(mktemp -d)"
+          /tmp/clean/bin/stegoforge doctor
+          /tmp/clean/bin/stegoforge schema --json capacity | head -5
+
+  audit:
+    name: Dependency audit (Python 3.12)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Resolved on 3.12 on purpose: Pillow 13 (which fixes 24 advisories in 12.3.0) needs Python >= 3.11,
+      # so on 3.10 there is nothing patched to resolve to. See "Python 3.10" in the README.
+      - name: Audit the runtime requirements (blocking)
+        run: |
+          python -m pip install --upgrade pip pip-audit==2.10.1
+          pip-audit --desc -r requirements.txt -r requirements-web.txt
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Docker image
+        run: docker build -t stegoforge:ci .
+      - name: Docker smoke (schema, doctor; offline)
+        run: |
+          docker run --rm -e STEGOFORGE_OFFLINE=1 stegoforge:ci stegoforge schema --json capacity | head -5
+          docker run --rm -e STEGOFORGE_OFFLINE=1 stegoforge:ci stegoforge doctor
+      - name: Web UI answers on the published port and refuses a foreign Host
+        run: |
+          docker run -d --name sf -p 5000:5000 -e STEGOFORGE_WEB_TOKEN=ci-token stegoforge:ci
+          for i in $(seq 1 30); do curl -fsS http://localhost:5000/ >/dev/null && break || sleep 1; done
+          curl -fsS http://localhost:5000/ >/dev/null
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: evil.example' http://localhost:5000/)" = "403"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:5000/capacity)" = "401"
+          docker rm -f sf
+
+  deb:
+    name: Debian package
+    runs-on: ubuntu-latest
+    needs: [test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Build the .deb
+        run: |
+          python -m pip install --upgrade pip setuptools
+          python scripts/build_deb.py --out dist-deb
+          dpkg-deb --info dist-deb/*.deb
+          dpkg-deb --contents dist-deb/*.deb | awk '{print $1, $2, $6}' | head -60
+      - name: Install it with apt (resolves Depends on this distribution) and run it
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ./dist-deb/stegoforge_*.deb
+          cd "$(mktemp -d)"
+          stegoforge --help >/dev/null
+          stegoforge doctor
+          # /usr/bin/python3: the system interpreter the .deb runs on, not setup-python's toolchain (no Pillow there)
+          /usr/bin/python3 -c "from PIL import Image; import os; Image.frombytes('RGB',(64,64),os.urandom(64*64*3)).save('c.png')"
+          echo "hello from the deb" > p.txt
+          stegoforge encode -c c.png -p p.txt -k 'correct-horse-battery-29!' --json >/dev/null
+          stegoforge decode -f c_stego.png -k 'correct-horse-battery-29!' -o out.txt --json >/dev/null
+          test "$(cat out.txt)" = "hello from the deb"
+          man -w stegoforge

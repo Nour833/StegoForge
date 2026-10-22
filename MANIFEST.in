@@ -1,6 +1,13 @@
 include requirements.txt
 include requirements-web.txt
+include requirements.lock
+include requirements.hash.lock
 include version_info.txt
+include assets.sha256
+include Dockerfile
 recursive-include web/templates *
 recursive-include web/static *
-recursive-include models *
+recursive-include models *.onnx *.sha256
+recursive-include docs *.md *.json *.yaml *.1
+recursive-include stegoforge_ops/schemas *
+recursive-include scripts *.py

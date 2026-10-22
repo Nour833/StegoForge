@@ -94,7 +94,10 @@ class TimingCovertEncoder(BaseEncoder):
             raise ValueError("No timing covert payload found")
 
         _, _, _, _, sniff = _scapy()
-        filt = f"tcp and dst host {listen_ip} and dst port {int(listen_port)}"
+        from core.network.guard import bpf_filter, validate_listen_target
+
+        listen_ip_v, listen_port_v = validate_listen_target(listen_ip, listen_port)
+        filt = bpf_filter(listen_ip_v, listen_port_v)
         packets = sniff(filter=filt, timeout=timeout, count=(expected_packets if expected_packets > 0 else 0))
         if len(packets) < 2:
             raise ValueError("Not enough packets captured for timing decode")

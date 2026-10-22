@@ -1,20 +1,130 @@
 """
 web/app.py - StegoForge Flask web interface.
 """
+import contextlib
+import hmac
 import io
 import json
+import logging
 import os
+import re
 import sys
 import tempfile
+import urllib.parse
+
 from pathlib import Path
 
-from flask import Flask, Response, jsonify, render_template, request, send_file, stream_with_context
+
+from flask import Flask, Response, render_template, request, send_file, stream_with_context
+from flask import jsonify as _flask_jsonify
 from flask_cors import CORS
+
+log = logging.getLogger(__name__)
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 ARTIFACT_PREFIX = "stegoforge_web_artifact_"
+_ARTIFACT_REGISTRY: dict[str, str] = {}
+_ARTIFACT_NAMES: dict[str, str] = {}
+
+# Origins allowed to call the API cross-origin: this machine only. The pattern is
+# anchored: flask-cors matches with re.match, so an unanchored "http://localhost:*"
+# also accepted "http://localhost.evil.com".
+_LOCAL_ORIGIN_RE = r"^https?://(localhost|127\.0\.0\.1|\[::1\])(:[0-9]{1,5})?$"
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+# Server-side temp locations must never reach the client.
+_TMP_PATH_RE = re.compile(re.escape(tempfile.gettempdir()) + r"[\\/]+(?:[^\\/\"\s]+[\\/]+)?")
+
+
+def _scrub_text(text: str) -> str:
+    return _TMP_PATH_RE.sub("", text)
+
+
+def _scrub(obj):
+    """Recursively strip the server's temp directory from every string in a response."""
+    if isinstance(obj, str):
+        return _scrub_text(obj)
+    if isinstance(obj, dict):
+        return {k: _scrub(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_scrub(v) for v in obj]
+    return obj
+
+
+def jsonify(*args, **kwargs):
+    """``flask.jsonify`` that never discloses temp-file paths."""
+    return _flask_jsonify(*[_scrub(a) for a in args], **{k: _scrub(v) for k, v in kwargs.items()})
+
+
+def _request_hostname() -> str:
+    return (urllib.parse.urlsplit("//" + request.host).hostname or "").lower()
+
+
+def _allowed_hosts() -> set[str]:
+    extra = {h.strip().lower() for h in os.getenv("STEGOFORGE_ALLOWED_HOSTS", "").split(",") if h.strip()}
+    return set(_LOOPBACK_HOSTS) | extra
+
+
+def _origin_allowed(origin: str) -> bool:
+    if re.match(_LOCAL_ORIGIN_RE, origin, flags=re.IGNORECASE):
+        return True
+    host = (urllib.parse.urlsplit(origin).hostname or "").lower()
+    return host in _allowed_hosts() - _LOOPBACK_HOSTS
+
+
+def _require_web_token() -> tuple[bool, str]:
+    """Optional shared-token auth for the local UI.
+
+    Set STEGOFORGE_WEB_TOKEN (or ``auto``) to require the ``X-Stego-Token`` header
+    or ``?token=`` (the latter only so plain download links can carry it).
+    Returns (allowed, error_message).
+    """
+    expected = os.getenv("STEGOFORGE_WEB_TOKEN", "")
+    if not expected:
+        return True, ""
+    provided = request.headers.get("X-Stego-Token", "") or request.args.get("token", "")
+    if not hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8")):
+        return False, "Missing or invalid web token"
+    return True, ""
+
+
+def _register_artifact(path: str, download_name: str | None = None) -> str:
+    """Register artifact path under an opaque ID (no path disclosure)."""
+    import secrets
+
+    aid = secrets.token_hex(16)
+    _ARTIFACT_REGISTRY[aid] = path
+    if download_name:
+        _ARTIFACT_NAMES[aid] = download_name
+    # Bound registry size; an evicted artifact's file goes with it.
+    while len(_ARTIFACT_REGISTRY) > 256:
+        old = next(iter(_ARTIFACT_REGISTRY))
+        Path(_ARTIFACT_REGISTRY.pop(old)).unlink(missing_ok=True)
+        _ARTIFACT_NAMES.pop(old, None)
+    return aid
+
+
+_RATE_BUCKETS: dict[str, list[float]] = {}
+RATE_LIMIT_POST_PER_MIN = 120
+
+
+def _check_rate(ip: str) -> bool:
+    """In-memory per-IP POST rate limit (120/min). Returns True if allowed."""
+    import time as _t
+
+    now = _t.time()
+    bucket = _RATE_BUCKETS.get(ip, [])
+    bucket = [t for t in bucket if now - t < 60.0]
+    if len(bucket) >= RATE_LIMIT_POST_PER_MIN:
+        _RATE_BUCKETS[ip] = bucket
+        return False
+    bucket.append(now)
+    _RATE_BUCKETS[ip] = bucket
+    if len(_RATE_BUCKETS) > 1024:
+        _RATE_BUCKETS.pop(next(iter(_RATE_BUCKETS)))
+    return True
 
 
 def _as_bool(form, key: str, default: bool = False) -> bool:
@@ -24,17 +134,25 @@ def _as_bool(form, key: str, default: bool = False) -> bool:
 
 
 def _json_sse(payload: dict) -> str:
-    return f"data: {json.dumps(payload)}\n\n"
+    return f"data: {json.dumps(_scrub(payload))}\n\n"
 
 
 def _artifact_allowed(path: Path) -> bool:
-    if not path.exists() or not path.is_file():
+    try:
+        resolved = path.resolve()
+    except OSError:
         return False
-    if path.name.startswith(ARTIFACT_PREFIX):
-        return True
-    if path.name.endswith("_fingerprint_heatmap.png") and path.parent.resolve() == Path.cwd().resolve():
-        return True
-    return False
+    if resolved.is_symlink():
+        return False
+    if not resolved.exists() or not resolved.is_file():
+        return False
+    tmp_root = Path(tempfile.gettempdir()).resolve()
+    try:
+        if resolved.parent != tmp_root:
+            return False
+    except Exception:
+        return False
+    return resolved.name.startswith(ARTIFACT_PREFIX)
 
 
 def _persist_artifact(data: bytes, suffix: str = ".bin") -> str:
@@ -45,60 +163,29 @@ def _persist_artifact(data: bytes, suffix: str = ".bin") -> str:
         return tmp.name
 
 
-def _is_video_name(name: str) -> bool:
-    ext = Path(name).suffix.lower()
-    return ext in {".mp4", ".webm"}
+def _safe_upload_name(raw: str | None, fallback: str) -> str:
+    """Sanitize multipart filenames: no paths, no traversal, safe chars only."""
+    import re as _re
 
-
-def _is_video_method(method: str | None) -> bool:
-    return method in {"video-dct", "video-motion"}
-
-
-# Magic bytes → (mime, extension)
-_MAGIC_MAP = [
-    (b"\x89PNG",           "image/png",        ".png"),
-    (b"\xff\xd8\xff",      "image/jpeg",       ".jpg"),
-    (b"GIF8",              "image/gif",        ".gif"),
-    (b"BM",                "image/bmp",        ".bmp"),
-    (b"II*\x00",           "image/tiff",       ".tiff"),
-    (b"MM\x00*",           "image/tiff",       ".tiff"),
-    (b"RIFF",              "audio/wav",        ".wav"),
-    (b"ID3",               "audio/mpeg",       ".mp3"),
-    (b"\xff\xfb",          "audio/mpeg",       ".mp3"),
-    (b"fLaC",              "audio/flac",       ".flac"),
-    (b"OggS",              "audio/ogg",        ".ogg"),
-    (b"\x00\x00\x00",      None,               None),   # placeholder (mp4 check below)
-    (b"%PDF",              "application/pdf",  ".pdf"),
-    (b"PK\x03\x04",        "application/zip",  ".zip"),  # also docx/xlsx
-    (b"\x7fELF",           "application/x-elf", ".elf"),
-    (b"MZ",                "application/x-pe",  ".exe"),
-    (b"{\n", None, None),   # placeholder JSON
-]
+    name = (raw or "").strip() or fallback
+    # Strip directories (both POSIX and Windows separators).
+    name = name.replace("\\", "/").split("/")[-1]
+    name = name.strip(". ")
+    if name in ("", ".", ".."):
+        name = fallback
+    # Allowlist chars.
+    name = _re.sub(r"[^A-Za-z0-9._-]", "_", name)
+    if name in ("", ".", ".."):
+        name = fallback
+    # Enforce length cap.
+    return name[:128]
 
 
 def _detect_payload_type(data: bytes) -> tuple[str, str]:
-    """Return (mime_type, extension) guessed from magic bytes."""
-    if len(data) >= 12:
-        # ISO base media (mp4/mov) — ftyp box at offset 4
-        if data[4:8] == b"ftyp":
-            return "video/mp4", ".mp4"
-    if data[:4] == b"PK\x03\x04":
-        # Could be DOCX or XLSX inside a zip
-        return "application/zip", ".zip"
-    if data[:4] == b"SFRG":
-        return "application/octet-stream", ".sfrg"
-    for magic, mime, ext in _MAGIC_MAP:
-        if mime and data[:len(magic)] == magic:
-            return mime, ext
-    # Try UTF-8 text heuristic
-    try:
-        text = data[:512].decode("utf-8")
-        printable = sum(1 for c in text if c.isprintable() or c in "\n\r\t")
-        if text and (printable / max(len(text), 1)) > 0.85:
-            return "text/plain", ".txt"
-    except UnicodeDecodeError:
-        pass
-    return "application/octet-stream", ".bin"
+    """Return (mime_type, extension) guessed from the payload (shared with the CLI)."""
+    from core.guess import guess_payload_type
+
+    return guess_payload_type(data)
 
 
 def _cleanup_old_artifacts(max_age_seconds: int = 3600):
@@ -114,12 +201,24 @@ def _cleanup_old_artifacts(max_age_seconds: int = 3600):
             pass
 
 
-def _encode_operation(form, files) -> tuple[dict, bytes, str]:
+def _public_result(result: dict, download_name: str) -> dict:
+    """The encode result as the client may see it: no server-side paths."""
+    public = {k: v for k, v in result.items() if k not in ("output", "carrier", "file")}
+    public["output"] = download_name
+    return public
+
+
+def _encode_operation(form, files, progress_callback=None) -> tuple[dict, bytes, str]:
     carrier_file = files.get("carrier")
     payload_file = files.get("payload")
     key = form.get("key", "")
     method = form.get("method", None) or None
-    depth = int(form.get("depth", 1))
+    try:
+        depth = int(form.get("depth", 1))
+    except (TypeError, ValueError):
+        raise ValueError("Depth must be an integer 1-4") from None
+    if depth not in (1, 2, 3, 4):
+        raise ValueError("Depth must be 1-4")
     decoy_file = files.get("decoy")
     decoy_key = form.get("decoy_key", None)
     wet_paper = _as_bool(form, "wet_paper", False)
@@ -128,19 +227,15 @@ def _encode_operation(form, files) -> tuple[dict, bytes, str]:
     test_survival = _as_bool(form, "test_survival", False)
     topic = form.get("topic", None) or None
     llm_model = form.get("llm_model", None) or None
+    allow_plaintext = _as_bool(form, "allow_plaintext", False)
 
     if not carrier_file or not payload_file:
         raise ValueError("Both carrier and payload files are required")
 
     from stegoforge import op_encode
-    from core.audio._convert import has_ffmpeg
 
-    carrier_name = carrier_file.filename or "carrier.bin"
-    payload_name = payload_file.filename or "payload.bin"
-
-    if _is_video_method(method) or (not method and _is_video_name(carrier_name)):
-        if not has_ffmpeg():
-            raise ValueError("Video methods require ffmpeg. Install with: sudo apt install ffmpeg")
+    carrier_name = _safe_upload_name(getattr(carrier_file, "filename", None), "carrier.bin")
+    payload_name = _safe_upload_name(getattr(payload_file, "filename", None), "payload.bin")
 
     with tempfile.TemporaryDirectory(prefix="stegoforge_web_encode_") as td:
         td_path = Path(td)
@@ -151,7 +246,7 @@ def _encode_operation(form, files) -> tuple[dict, bytes, str]:
 
         decoy_path = None
         if decoy_file and decoy_key:
-            decoy_name = decoy_file.filename or "decoy.bin"
+            decoy_name = _safe_upload_name(getattr(decoy_file, "filename", None), "decoy.bin")
             decoy_path = td_path / decoy_name
             decoy_path.write_bytes(decoy_file.read())
 
@@ -172,11 +267,15 @@ def _encode_operation(form, files) -> tuple[dict, bytes, str]:
             topic,
             llm_model,
             False,
+            allow_plaintext=allow_plaintext,
+            progress_callback=progress_callback,
         )
 
         stego_bytes = Path(result["output"]).read_bytes()
+        # The extension reflects what the encoder produced (mp3 -> wav, png+dct -> jpg, ...).
+        download_name = f"{Path(carrier_name).stem}_stego{Path(result['output']).suffix or '.bin'}"
 
-    return result, stego_bytes, carrier_name
+    return _public_result(result, download_name), stego_bytes, download_name
 
 
 def _decode_operation(form, files) -> tuple[dict, bytes]:
@@ -189,12 +288,8 @@ def _decode_operation(form, files) -> tuple[dict, bytes]:
         raise ValueError("Stego file is required")
 
     from stegoforge import op_decode
-    from core.audio._convert import has_ffmpeg
 
-    filename = stego_file.filename or "stego.bin"
-    if _is_video_method(method) or (not method and _is_video_name(filename)):
-        if not has_ffmpeg():
-            raise ValueError("Video methods require ffmpeg. Install with: sudo apt install ffmpeg")
+    filename = _safe_upload_name(getattr(stego_file, "filename", None), "stego.bin")
 
     with tempfile.TemporaryDirectory(prefix="stegoforge_web_decode_") as td:
         td_path = Path(td)
@@ -224,28 +319,114 @@ def create_app():
         app = Flask(__name__, template_folder=template_folder, static_folder=static_folder)
     else:
         app = Flask(__name__, template_folder="templates", static_folder="static")
-    CORS(app)
-    app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024  # 200MB max upload
+    # Restrict CORS to local origins only — the UI is a localhost tool and
+    # must not be drivable by arbitrary external websites.
+    local = [_LOCAL_ORIGIN_RE]
+    CORS(app, resources={r"/api/*": {"origins": local},
+                         r"/encode": {"origins": local},
+                         r"/decode": {"origins": local},
+                         r"/detect": {"origins": local}})
+    from core.config import get_config as _get_cfg
+
+    app.config["MAX_CONTENT_LENGTH"] = _get_cfg().max_upload_bytes
 
     _cleanup_old_artifacts()
 
+    # Per-process token: STEGOFORGE_WEB_TOKEN=auto generates one per boot and
+    # prints it to stderr (operator must present it as X-Stego-Token/?token=).
+    _boot_token = os.getenv("STEGOFORGE_WEB_TOKEN", "")
+    if _boot_token == "auto":
+        import secrets as _sec
+
+        _boot_token = _sec.token_hex(16)
+        os.environ["STEGOFORGE_WEB_TOKEN"] = _boot_token
+        print(f"[StegoForge] web token (this process only): {_boot_token}", file=sys.stderr)
+
+    @app.before_request
+    def _web_guard():
+        from flask import request as _rq
+
+        # DNS rebinding: a page on evil.example can resolve its own name to 127.0.0.1 and then
+        # talk to this server as "same origin"; the Host header still names evil.example.
+        if _request_hostname() not in _allowed_hosts():
+            return jsonify({"error": "Invalid Host header"}), 403
+        if _rq.method != "POST":
+            return None
+        # Cross-site form posts reach the server even when CORS blocks reading the reply.
+        origin = _rq.headers.get("Origin")
+        if origin and (origin == "null" or not _origin_allowed(origin)):
+            return jsonify({"error": "Cross-origin request refused"}), 403
+        ip = (_rq.remote_addr or "local")
+        if not _check_rate(ip):
+            return jsonify({"error": "Rate limit exceeded (120 POST/min)"}), 429
+        ok, err = _require_web_token()
+        if not ok:
+            return jsonify({"error": err}), 401
+        # CSRF: when a token is configured it doubles as the CSRF secret —
+        # cross-origin forms cannot read it, so require it on POSTs.
+        # (Enforced inside _require_web_token; nothing extra when unset.)
+        with contextlib.suppress(Exception):
+            log.info(
+                "web %s %s from=%s len=%s",
+                _rq.method, _rq.path, ip, _rq.content_length,
+            )
+        return None
+
+    @app.after_request
+    def _security_headers(resp):
+        resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+        resp.headers.setdefault("X-Frame-Options", "DENY")
+        resp.headers.setdefault("Referrer-Policy", "no-referrer")
+        resp.headers.setdefault("Content-Security-Policy", "frame-ancestors 'none'")
+        if request.path.startswith(("/api/", "/artifact")) or request.method == "POST":
+            resp.headers.setdefault("Cache-Control", "no-store")
+        return resp
+
     @app.route("/")
     def index():
-        return render_template("index.html", initial_tab="encode")
+        offline_fonts = os.getenv("STEGOFORGE_OFFLINE_FONTS", "") in ("1", "true", "yes") or os.getenv(
+            "STEGOFORGE_OFFLINE", "") in ("1", "true", "yes")
+        return render_template("index.html", initial_tab="encode", offline_fonts=offline_fonts)
 
     @app.route("/survive")
     def survive_page():
-        return render_template("index.html", initial_tab="survive")
+        offline_fonts = os.getenv("STEGOFORGE_OFFLINE_FONTS", "") in ("1", "true", "yes") or os.getenv(
+            "STEGOFORGE_OFFLINE", "") in ("1", "true", "yes")
+        return render_template("index.html", initial_tab="survive", offline_fonts=offline_fonts)
 
     @app.route("/artifact")
     def artifact_file():
-        p = request.args.get("path", "")
-        if not p:
-            return jsonify({"error": "Missing path"}), 400
-        artifact = Path(p)
+        ok, err = _require_web_token()
+        if not ok:
+            return jsonify({"error": err}), 401
+        # Opaque ?id= only — filesystem paths are never accepted (no disclosure).
+        aid = request.args.get("id", "")
+        if not aid:
+            return jsonify({"error": "Missing artifact id"}), 400
+        path = _ARTIFACT_REGISTRY.get(aid)
+        if not path:
+            return jsonify({"error": "Artifact not found"}), 404
+        artifact = Path(path)
         if not _artifact_allowed(artifact):
             return jsonify({"error": "Artifact not found"}), 404
-        return send_file(str(artifact), as_attachment=False)
+        return send_file(str(artifact), as_attachment=True, download_name=_ARTIFACT_NAMES.get(aid))
+
+    @app.route("/artifact/<aid>")
+    def artifact_by_id(aid: str):
+        ok, err = _require_web_token()
+        if not ok:
+            return jsonify({"error": err}), 401
+        path = _ARTIFACT_REGISTRY.get(aid or "")
+        if not path:
+            return jsonify({"error": "Artifact not found"}), 404
+        artifact = Path(path)
+        if not _artifact_allowed(artifact):
+            return jsonify({"error": "Artifact not found"}), 404
+        return send_file(str(artifact), as_attachment=True, download_name=_ARTIFACT_NAMES.get(aid))
+
+    @app.errorhandler(413)
+    def _too_large(_e):
+        return jsonify({"error": "Upload exceeds limit"}), 413
 
     @app.route("/api/platform-profiles", methods=["GET"])
     def api_platform_profiles():
@@ -274,15 +455,26 @@ def create_app():
         try:
             upload = request.files.get("file")
             payload = request.files.get("payload")
-            depth = int(request.form.get("depth", 1))
+            try:
+                depth = int(request.form.get("depth", 1))
+            except (TypeError, ValueError):
+                return jsonify({"error": "Depth must be an integer 1-4"}), 400
+            if depth not in (1, 2, 3, 4):
+                return jsonify({"error": "Depth must be 1-4"}), 400
             if not upload:
                 return jsonify({"error": "No carrier file provided"}), 400
 
             from stegoforge import op_capacity
 
             payload_size = len(payload.read()) if payload else 0
-            filename = upload.filename or "carrier.bin"
+            # What gets embedded is the encrypted envelope, a little larger than the payload itself.
+            from core.crypto import aes
+
+            encrypted_size = payload_size + aes.HEADER_LEN_V3 + aes.TAG_LEN if payload_size else 0
+            filename = _safe_upload_name(getattr(upload, "filename", None), "carrier.bin")
             carrier_bytes = upload.read()
+            if len(carrier_bytes) > _get_cfg().max_upload_bytes:
+                return jsonify({"error": "Carrier exceeds upload limit"}), 400
 
             methods = [
                 "lsb",
@@ -311,7 +503,7 @@ def create_app():
                     try:
                         r = op_capacity(str(carrier_path), method, depth)
                         cap_bytes = int(r.get("capacity_bytes", 0))
-                        util = round((payload_size / cap_bytes) * 100.0, 2) if cap_bytes > 0 and payload_size > 0 else 0.0
+                        util = round((encrypted_size / cap_bytes) * 100.0, 2) if cap_bytes > 0 and encrypted_size > 0 else 0.0
                         rows.append(
                             {
                                 "method": method,
@@ -322,7 +514,8 @@ def create_app():
                                 "video_context": r.get("video_context"),
                             }
                         )
-                    except Exception:
+                    except Exception as exc:
+                        log.debug("capacity-matrix %s failed: %s", method, exc)
                         continue
 
             rows.sort(key=lambda x: x["capacity_bytes"], reverse=True)
@@ -330,12 +523,15 @@ def create_app():
                 {
                     "file": filename,
                     "payload_size": payload_size,
+                    "encrypted_size": encrypted_size,
                     "depth": depth,
                     "rows": rows,
                 }
             )
-        except Exception as exc:
-            return jsonify({"error": str(exc)}), 500
+        except (OSError, ValueError) as exc:
+            return jsonify({"error": str(exc)}), 400
+        except Exception:
+            return jsonify({"error": "Capacity check failed"}), 500
 
     @app.route("/api/survive", methods=["POST"])
     def api_survive():
@@ -345,7 +541,12 @@ def create_app():
             key = request.form.get("key", "")
             target = request.form.get("target", "twitter")
             method = request.form.get("method", None) or None
-            depth = int(request.form.get("depth", 1))
+            try:
+                depth = int(request.form.get("depth", 1))
+            except (TypeError, ValueError):
+                return jsonify({"error": "Depth must be an integer 1-4"}), 400
+            if depth not in (1, 2, 3, 4):
+                return jsonify({"error": "Depth must be 1-4"}), 400
 
             if not carrier_file or not payload_file:
                 return jsonify({"error": "carrier and payload are required"}), 400
@@ -354,8 +555,8 @@ def create_app():
 
             with tempfile.TemporaryDirectory(prefix="stegoforge_web_survive_") as td:
                 td_path = Path(td)
-                carrier_path = td_path / (carrier_file.filename or "carrier.bin")
-                payload_path = td_path / (payload_file.filename or "payload.bin")
+                carrier_path = td_path / _safe_upload_name(getattr(carrier_file, "filename", None), "carrier.bin")
+                payload_path = td_path / _safe_upload_name(getattr(payload_file, "filename", None), "payload.bin")
                 carrier_path.write_bytes(carrier_file.read())
                 payload_path.write_bytes(payload_file.read())
 
@@ -376,34 +577,96 @@ def create_app():
                     None,
                     None,
                     False,
+                    allow_plaintext=_as_bool(request.form, "allow_plaintext", False),
                 )
 
-            return jsonify(result)
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
+            return jsonify(_public_result(result, "survival-test"))
+        except (OSError, ValueError) as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception:
+            return jsonify({"error": "Survival simulation failed"}), 500
 
     @app.route("/api/encode-stream", methods=["POST"])
     def api_encode_stream():
         def _stream():
-            yield _json_sse({"type": "info", "text": "Validating encode request..."})
-            try:
-                result, stego_bytes, carrier_name = _encode_operation(request.form, request.files)
-                yield _json_sse({"type": "info", "text": "Embedding complete, preparing artifact..."})
+            import queue
+            import threading
+            import time as _time
 
-                ext = Path(carrier_name).suffix or ".bin"
-                artifact = _persist_artifact(stego_bytes, ext)
-                download_name = f"{Path(carrier_name).stem}_stego{ext}"
+            # Snapshot request data (streaming must not touch `request` in threads).
+            form = request.form.to_dict()
+            files = {k: (getattr(v, "filename", ""), v.read()) for k, v in request.files.items()}
 
-                payload = {
-                    "type": "success",
-                    "text": "Encode completed",
-                    "result": result,
-                    "artifact": artifact,
-                    "download_name": download_name,
-                }
-                yield _json_sse(payload)
-            except Exception as exc:
-                yield _json_sse({"type": "error", "text": str(exc)})
+            class _MemFile:
+                def __init__(self, name: str, data: bytes):
+                    self.filename = name
+                    self._data = data
+
+                def read(self) -> bytes:
+                    return self._data
+
+            mem_files = {k: _MemFile(name, data) for k, (name, data) in files.items()}
+            events: queue.Queue[dict] = queue.Queue()
+            done = {"finished": False}
+
+            def _progress(done_n: int, total_n: int):
+                pct = int((done_n / max(1, total_n)) * 100)
+                events.put({"type": "progress", "pct": 5 + int(pct * 0.85), "text": f"Embedding… {pct}%"})
+
+            def _worker():
+                try:
+                    result, stego_bytes, download_name = _encode_operation(form, mem_files, _progress)
+                    events.put({"type": "done", "result": result,
+                                "stego": stego_bytes.hex(), "download_name": download_name})
+                except (OSError, ValueError) as exc:
+                    events.put({"type": "error", "text": str(exc)})
+                except Exception:
+                    log.exception("encode-stream worker failed")
+                    events.put({"type": "error", "text": "Encode failed"})
+                finally:
+                    done["finished"] = True
+
+            thread = threading.Thread(target=_worker, daemon=True)
+            thread.start()
+            yield _json_sse({"type": "progress", "pct": 5, "text": "Validating encode request..."})
+            start = _time.time()
+            last_tick = 0
+            while True:
+                try:
+                    ev = events.get(timeout=0.5)
+                except Exception:
+                    ev = None
+                if ev is None:
+                    # Keepalive ticks while the worker runs (cap at 90%).
+                    if not done["finished"] and _time.time() - start < 300:
+                        last_tick = min(90, last_tick + 2)
+                        yield _json_sse({"type": "progress", "pct": last_tick,
+                                         "text": "Embedding…"})
+                        continue
+                    break
+                kind = ev.get("type")
+                if kind == "progress":
+                    last_tick = max(last_tick, int(ev.get("pct", 0)))
+                    yield _json_sse(ev)
+                elif kind == "error":
+                    yield _json_sse(ev)
+                    break
+                elif kind == "done":
+                    result = ev["result"]
+                    stego_bytes = bytes.fromhex(ev["stego"])
+                    download_name = ev["download_name"]
+                    artifact = _persist_artifact(stego_bytes, Path(download_name).suffix or ".bin")
+                    aid = _register_artifact(artifact, download_name)
+                    yield _json_sse({
+                        "type": "success",
+                        "pct": 100,
+                        "text": "Encode completed",
+                        "result": result,
+                        "artifact_id": aid,
+                        "download_name": download_name,
+                    })
+                    break
+            thread.join(timeout=5)
 
         return Response(stream_with_context(_stream()), mimetype="text/event-stream")
 
@@ -417,18 +680,22 @@ def create_app():
                     yield _json_sse({"type": "error", "text": "No file provided"})
                     return
 
-                filename = upload.filename or "file.bin"
+                filename = _safe_upload_name(getattr(upload, "filename", None), "file.bin")
                 raw = upload.read()
+                if len(raw) > 200 * 1024 * 1024:
+                    yield _json_sse({"type": "error", "text": "File exceeds upload limit"})
+                    return
 
-                toggle_keys = ["chi2", "rs", "exif", "blind", "ml", "fingerprint", "binary"]
-                explicit = any(k in request.form for k in toggle_keys)
-                chi2 = _as_bool(request.form, "chi2", not explicit)
-                rs = _as_bool(request.form, "rs", not explicit)
-                exif = _as_bool(request.form, "exif", not explicit)
-                blind = _as_bool(request.form, "blind", not explicit)
-                ml = _as_bool(request.form, "ml", not explicit)
-                fingerprint = _as_bool(request.form, "fingerprint", not explicit)
-                binary = _as_bool(request.form, "binary", not explicit)
+                from web.blueprints.forms import parse_detector_flags
+
+                flags = parse_detector_flags(request.form)
+                chi2 = flags["chi2"]
+                rs = flags["rs"]
+                exif = flags["exif"]
+                blind = flags["blind"]
+                ml = flags["ml"]
+                fingerprint = flags["fingerprint"]
+                binary = flags["binary"]
 
                 if not any([chi2, rs, exif, blind, ml, fingerprint, binary]):
                     yield _json_sse({"type": "error", "text": "Select at least one detector"})
@@ -462,20 +729,18 @@ def create_app():
                     )
 
                 yield _json_sse({"type": "success", "text": "Detection completed", "report": report})
-            except Exception as exc:
+            except (OSError, ValueError) as exc:
                 yield _json_sse({"type": "error", "text": str(exc)})
+            except Exception:
+                log.exception("detect-stream failed")
+                yield _json_sse({"type": "error", "text": "Detection failed"})
 
         return Response(stream_with_context(_stream()), mimetype="text/event-stream")
 
     @app.route("/encode", methods=["POST"])
     def encode():
         try:
-            result, stego_bytes, carrier_name = _encode_operation(request.form, request.files)
-            _ = result
-
-            stem = Path(carrier_name).stem
-            ext = Path(carrier_name).suffix.lower()
-            out_name = f"{stem}_stego{ext or '.bin'}"
+            _result, stego_bytes, out_name = _encode_operation(request.form, request.files)
 
             buf = io.BytesIO(stego_bytes)
             buf.seek(0)
@@ -486,10 +751,11 @@ def create_app():
                 mimetype="application/octet-stream",
             )
 
-        except (ValueError, IOError) as e:
+        except (OSError, ValueError) as e:
             return jsonify({"error": str(e)}), 400
-        except Exception as e:
-            return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
+        except Exception:
+            log.exception("encode failed")
+            return jsonify({"error": "Encode failed"}), 500
 
     @app.route("/decode", methods=["POST"])
     def decode():
@@ -519,10 +785,10 @@ def create_app():
                 response.headers[k] = v
             return response
 
-        except (ValueError, IOError) as e:
+        except (OSError, ValueError) as e:
             return jsonify({"error": str(e)}), 400
-        except Exception as e:
-            return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
+        except Exception:
+            return jsonify({"error": "Decode failed"}), 500
 
 
     @app.route("/detect", methods=["POST"])
@@ -532,22 +798,23 @@ def create_app():
             if not upload:
                 return jsonify({"error": "No file provided"}), 400
 
-            toggle_keys = ["chi2", "rs", "exif", "blind", "ml", "fingerprint", "binary"]
-            explicit = any(k in request.form for k in toggle_keys)
-            chi2 = _as_bool(request.form, "chi2", not explicit)
-            rs = _as_bool(request.form, "rs", not explicit)
-            exif = _as_bool(request.form, "exif", not explicit)
-            blind = _as_bool(request.form, "blind", not explicit)
-            ml = _as_bool(request.form, "ml", not explicit)
-            fingerprint = _as_bool(request.form, "fingerprint", not explicit)
-            binary = _as_bool(request.form, "binary", not explicit)
+            from web.blueprints.forms import parse_detector_flags
+
+            flags = parse_detector_flags(request.form)
+            chi2 = flags["chi2"]
+            rs = flags["rs"]
+            exif = flags["exif"]
+            blind = flags["blind"]
+            ml = flags["ml"]
+            fingerprint = flags["fingerprint"]
+            binary = flags["binary"]
 
             if not any([chi2, rs, exif, blind, ml, fingerprint, binary]):
                 return jsonify({"error": "Select at least one detector"}), 400
 
             from stegoforge import op_detect
 
-            filename = upload.filename or "file.bin"
+            filename = _safe_upload_name(getattr(upload, "filename", None), "file.bin")
             with tempfile.TemporaryDirectory(prefix="stegoforge_web_detect_") as td:
                 td_path = Path(td)
                 file_path = td_path / filename
@@ -567,8 +834,10 @@ def create_app():
 
             return jsonify({"file": filename, "results": report["results"]})
 
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
+        except (OSError, ValueError) as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception:
+            return jsonify({"error": "Detection failed"}), 500
 
     @app.route("/ctf", methods=["POST"])
     def ctf():
@@ -579,7 +848,7 @@ def create_app():
 
             from stegoforge import op_ctf
 
-            filename = upload.filename or "file.bin"
+            filename = _safe_upload_name(getattr(upload, "filename", None), "file.bin")
             extracted = None
             with tempfile.TemporaryDirectory(prefix="stegoforge_web_ctf_") as td:
                 td_path = Path(td)
@@ -634,8 +903,10 @@ def create_app():
 
             return jsonify(response)
 
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
+        except (OSError, ValueError) as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception:
+            return jsonify({"error": "CTF analysis failed"}), 500
 
 
     @app.route("/capacity", methods=["GET", "POST"])
@@ -646,14 +917,19 @@ def create_app():
 
             upload = request.files.get("file")
             method = request.form.get("method", None)
-            depth = int(request.form.get("depth", 1))
+            try:
+                depth = int(request.form.get("depth", 1))
+            except (TypeError, ValueError):
+                return jsonify({"error": "Depth must be an integer 1-4"}), 400
+            if depth not in (1, 2, 3, 4):
+                return jsonify({"error": "Depth must be 1-4"}), 400
 
             if not upload:
                 return jsonify({"error": "No file provided"}), 400
 
             from stegoforge import op_capacity
 
-            filename = upload.filename or "file.bin"
+            filename = _safe_upload_name(getattr(upload, "filename", None), "file.bin")
             with tempfile.TemporaryDirectory(prefix="stegoforge_web_capacity_") as td:
                 td_path = Path(td)
                 file_path = td_path / filename
@@ -663,8 +939,10 @@ def create_app():
             result["file"] = filename
             return jsonify(result)
 
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
+        except (OSError, ValueError) as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception:
+            return jsonify({"error": "Capacity check failed"}), 500
 
     @app.route("/diff", methods=["POST"])
     def diff():
@@ -679,8 +957,8 @@ def create_app():
 
             with tempfile.TemporaryDirectory(prefix="stegoforge_web_diff_") as td:
                 td_path = Path(td)
-                c_path = td_path / (cover_file.filename or "cover.bin")
-                s_path = td_path / (stego_file.filename or "stego.bin")
+                c_path = td_path / _safe_upload_name(getattr(cover_file, "filename", None), "cover.bin")
+                s_path = td_path / _safe_upload_name(getattr(stego_file, "filename", None), "stego.bin")
                 map_path = td_path / "heatmap.png"
 
                 c_path.write_bytes(cover_file.read())
@@ -694,8 +972,11 @@ def create_app():
                     result["heatmap_b64"] = f"data:image/png;base64,{b64}"
 
             return jsonify(result)
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
+        except (OSError, ValueError) as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception:
+            log.exception("diff failed")
+            return jsonify({"error": "Diff failed"}), 500
 
     return app
 

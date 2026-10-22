@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP", "SIM", "LOG"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# The .deb runs against the distribution's python3-typer. Typer 0.9 (our declared minimum, and what failed in
+# CI on Ubuntu) cannot parse `X | None` in a command signature ("Type not yet supported"), so the CLI keeps
+# `Optional[X]` in those signatures.
+"stegoforge.py" = ["UP007", "UP045"]
+# TODO: append `from None` to the two `raise ... ` lines flagged in the except blocks of tcp.py,
+# then delete this entry. (core/network was deliberately left untouched in the overhaul session.)
+"core/network/tcp.py" = ["B904"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+warn_unused_configs = true
+show_error_codes = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+ignore_errors = true

@@ -3,7 +3,6 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import pytest
 from core.audio.spectrogram import SpectrogramEncoder
 
 FIXTURES = Path(__file__).parent / "fixtures"
