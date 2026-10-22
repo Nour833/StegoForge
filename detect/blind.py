@@ -16,15 +16,16 @@ Returns all candidates sorted by score, with parameters used.
 Target: completes in under 2 seconds on a typical image.
 """
 import io
-import struct
+import logging
 import itertools
 import time
-from typing import Any
 
 import numpy as np
 from PIL import Image
 
 from detect.base import BaseDetector, DetectionResult
+
+log = logging.getLogger(__name__)
 
 # Known file magic bytes for scoring
 KNOWN_MAGIC = {
@@ -57,68 +58,61 @@ class BlindExtractor(BaseDetector):
         ".wav", ".flac", ".mp3", ".ogg"
     ]
 
-    def analyze(self, file_bytes: bytes, filename: str = "") -> DetectionResult:
+    def analyze(
+        self,
+        file_bytes: bytes,
+        filename: str = "",
+        timeout: float = 10.0,
+        max_candidates: int = 50,
+        workers: int = 4,
+    ) -> DetectionResult:
         start_time = time.time()
-        candidates = []
+        candidates: list[dict] = []
+
+        def _timed_out() -> bool:
+            return (time.time() - start_time) > timeout
 
         import os
         ext = os.path.splitext(filename)[1].lower() if filename else ""
 
         if ext in (".wav", ".flac", ".mp3", ".ogg"):
             # AUDIO BLIND EXTRACTION
-            from stegoforge import get_encoder
+            from stegoforge_ops.registry import get_encoder
             for method_name in ["audio-lsb", "phase"]:
+                if _timed_out():
+                    break
                 try:
                     encoder = get_encoder(method_name)
                     for depth in [1, 2, 3, 4]:
+                        if _timed_out() or len(candidates) >= max_candidates:
+                            break
                         try:
                             raw_payload = encoder.decode(file_bytes, ext=ext, depth=depth)
-                            # Let's score it.
-                            score = 0.0
-                            payload_type = "Unknown bin"
-                            if raw_payload.startswith(b"SFRG"):
-                                score = 1.0
-                                payload_type = "StegoForge encrypted payload"
-                            else:
-                                for magic, desc in KNOWN_MAGIC.items():
-                                    if raw_payload.startswith(magic):
-                                        score = 0.8
-                                        payload_type = desc
-                                        break
-                                if score == 0.0:
-                                    try:
-                                        text = raw_payload.decode("utf-8")
-                                        if sum(1 for c in text if c.isprintable()) / max(1, len(text)) > 0.9:
-                                            score = 0.6
-                                            payload_type = "Text data"
-                                    except UnicodeDecodeError:
-                                        score = 0.1
-                                        
-                            if score > 0.0:
-                                candidates.append({
-                                    "channel": method_name,
-                                    "depth": depth,
-                                    "row_order": "normal",
-                                    "channel_perm": None,
-                                    "payload_bytes": len(raw_payload),
-                                    "score": score,
-                                    "payload_preview": _describe_payload(raw_payload),
-                                    "payload": raw_payload,
-                                })
+                            # Single shared scorer (no duplicated magic/text logic).
+                            score = _score_payload(raw_payload)
+                            if score <= 0.0:
+                                continue
+                            candidates.append({
+                                "channel": method_name,
+                                "depth": depth,
+                                "row_order": "normal",
+                                "channel_perm": None,
+                                "payload_bytes": len(raw_payload),
+                                "score": score,
+                                "payload_preview": _describe_payload(raw_payload),
+                                "payload": raw_payload,
+                            })
                         except ValueError:
                             continue
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log.debug("blind audio method %s failed: %s", method_name, exc)
 
         else:
             # IMAGE BLIND EXTRACTION
             try:
-                img = Image.open(io.BytesIO(file_bytes))
+                img: Image.Image = Image.open(io.BytesIO(file_bytes))
                 if img.mode not in ("RGB", "RGBA"):
-                    if img.mode == "P":
-                        img = img.convert("RGBA")
-                    else:
-                        img = img.convert("RGB")
+                    img = img.convert("RGBA") if img.mode == "P" else img.convert("RGB")
                 arr = np.array(img, dtype=np.uint8)
             except Exception as e:
                 return DetectionResult(
@@ -131,47 +125,30 @@ class BlindExtractor(BaseDetector):
                         "error": str(e),
                     },
                 )
-                
+
             # NATIVE IMAGE BLIND EXTRACTION (Advanced Methods)
-            from stegoforge import get_encoder
+            from stegoforge_ops.registry import get_encoder
             for method_name in ["dct", "adaptive-lsb", "palette", "alpha"]:
+                if _timed_out():
+                    break
                 try:
                     encoder = get_encoder(method_name)
                     raw_payload = encoder.decode(file_bytes)
-                    
-                    score = 0.0
-                    payload_type = "Unknown bin"
-                    if raw_payload.startswith(b"SFRG"):
-                        score = 1.0
-                        payload_type = "StegoForge encrypted payload"
-                    else:
-                        for magic, desc in KNOWN_MAGIC.items():
-                            if raw_payload.startswith(magic):
-                                score = 0.8
-                                payload_type = desc
-                                break
-                        if score == 0.0:
-                            try:
-                                text = raw_payload.decode("utf-8")
-                                if sum(1 for c in text if c.isprintable()) / max(1, len(text)) > 0.9:
-                                    score = 0.6
-                                    payload_type = "Text data"
-                            except UnicodeDecodeError:
-                                score = 0.1
-                                
-                    if score > 0.0:
-                        candidates.append({
-                            "channel": method_name,
-                            "depth": 1,
-                            "row_order": "normal",
-                            "channel_perm": None,
-                            "payload_bytes": len(raw_payload),
-                            "score": score,
-                            "payload_preview": _describe_payload(raw_payload),
-                            "payload": raw_payload,
-                        })
-                except Exception:
-                    pass
+                    score = _score_payload(raw_payload)
+                    if score <= 0.0:
+                        continue
+                    candidates.append({
+                        "channel": method_name,
+                        "depth": 1,
+                        "row_order": "normal",
+                        "channel_perm": None,
+                        "payload_bytes": len(raw_payload),
+                        "score": score,
+                        "payload_preview": _describe_payload(raw_payload),
+                        "payload": raw_payload,
+                    })
+                except Exception as exc:
+                    log.debug("blind native method %s failed: %s", method_name, exc)
 
             has_alpha = (img.mode == "RGBA")
             channel_names = ["R", "G", "B"] + (["A"] if has_alpha else [])
@@ -184,33 +161,67 @@ class BlindExtractor(BaseDetector):
             # Include an "ALL" channel (interleaved channels)
             channel_names_to_try = channel_names + ["ALL"]
 
+            # Build full combo list for worker-pool execution.
+            combos: list[tuple] = []
             for channel_name in channel_names_to_try:
-                ch_idx = CHANNELS[channel_name] if channel_name in CHANNELS else None
+                ch_idx = CHANNELS.get(channel_name)
                 if ch_idx is not None and (ch_idx >= arr.shape[2] if len(arr.shape) == 3 else ch_idx > 0):
                     continue
-
                 for depth in depths:
                     for row_order in orders:
-                        # Try with each channel order permutation for R/G/B
                         perms_to_try = channel_permutations if channel_name in ("R", "G", "B") else [None]
-
                         for perm in perms_to_try:
-                            try:
-                                result = self._try_extract(arr, ch_idx, depth, row_order, perm)
-                                if result is not None:
-                                    payload, score = result
-                                    candidates.append({
-                                        "channel": channel_name,
-                                        "depth": depth,
-                                        "row_order": row_order,
-                                        "channel_perm": list(perm) if perm else None,
-                                        "payload_bytes": len(payload),
-                                        "score": score,
-                                        "payload_preview": _describe_payload(payload),
-                                        "payload": payload,
-                                    })
-                            except Exception:
-                                continue
+                            combos.append((channel_name, ch_idx, depth, row_order, perm))
+
+            def _run_one(combo: tuple) -> dict | None:
+                channel_name, ch_idx, depth, row_order, perm = combo
+                try:
+                    result = self._try_extract(arr, ch_idx, depth, row_order, perm)
+                except Exception as exc:
+                    log.debug("blind extract failed: %s", exc)
+                    return None
+                if result is None:
+                    return None
+                payload, score = result
+                return {
+                    "channel": channel_name,
+                    "depth": depth,
+                    "row_order": row_order,
+                    "channel_perm": list(perm) if perm else None,
+                    "payload_bytes": len(payload),
+                    "score": score,
+                    "payload_preview": _describe_payload(payload),
+                    "payload": payload,
+                }
+
+            if workers is not None and workers > 1 and len(combos) > 1:
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+
+                with ThreadPoolExecutor(max_workers=max(1, int(workers))) as pool:
+                    futures = {pool.submit(_run_one, c): c for c in combos}
+                    for fut in as_completed(futures):
+                        if _timed_out():
+                            for f in futures:
+                                f.cancel()
+                            break
+                        try:
+                            hit = fut.result(timeout=max(0.1, timeout - (time.time() - start_time)))
+                        except Exception as exc:
+                            log.debug("blind worker failed: %s", exc)
+                            continue
+                        if hit is not None:
+                            candidates.append(hit)
+                            if len(candidates) >= max_candidates:
+                                for f in futures:
+                                    f.cancel()
+                                break
+            else:
+                for combo in combos:
+                    if _timed_out() or len(candidates) >= max_candidates:
+                        break
+                    hit = _run_one(combo)
+                    if hit is not None:
+                        candidates.append(hit)
         elapsed = time.time() - start_time
         candidates.sort(key=lambda c: c["score"], reverse=True)
 
@@ -263,14 +274,14 @@ class BlindExtractor(BaseDetector):
                 reordered = [channels[channel_perm[0]], channels[channel_perm[1]], channels[channel_perm[2]]]
                 if arr.shape[2] > 3:
                     reordered.extend(channels[3:])  # keep alpha if present
-                flat = np.dstack(reordered).flatten()
+                flat: np.ndarray = np.dstack(reordered).flatten()
             else:
                 flat = arr.flatten()
         else:
             if len(arr.shape) == 3:
                 if channel_perm and channel_idx < 3:
-                    reordered = arr[:, :, list(channel_perm)]
-                    channel_data = reordered[:, :, channel_idx]
+                    permuted = arr[:, :, list(channel_perm)]
+                    channel_data = permuted[:, :, channel_idx]
                 else:
                     channel_data = arr[:, :, channel_idx]
             else:
@@ -283,7 +294,7 @@ class BlindExtractor(BaseDetector):
         # Extract bits
         mask = (1 << depth) - 1
         vals = flat & mask
-        
+
         # Vectorized bit extraction
         shifts = np.arange(depth - 1, -1, -1, dtype=np.uint8)
         all_bits = (vals[:, None] >> shifts) & 1
@@ -330,7 +341,7 @@ def _score_payload(data: bytes) -> float:
         return min(1.0, score)
 
     # Check known file magic bytes
-    for magic, desc in KNOWN_MAGIC.items():
+    for magic in KNOWN_MAGIC:
         if data[:len(magic)] == magic:
             score += 0.8
             return min(1.0, score)

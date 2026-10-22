@@ -1,0 +1,5 @@
+# Canonical identity for `git log` / `git shortlog` / `git blame` output.
+# GitHub attributes commits by e-mail address; the backup branch's squashed commit used a
+# placeholder (stegoforge@localhost) that matches no account, so it is mapped here.
+nour833 <nourelislem84@outlook.fr> StegoForge <stegoforge@localhost>
+nour833 <nourelislem84@outlook.fr> Nour833 <nourelislem84@outlook.fr>

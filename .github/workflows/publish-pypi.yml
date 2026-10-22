@@ -6,11 +6,13 @@ on:
       - "v*"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  pypi-publish:
-    name: Upload release to PyPI
+  verify:
+    name: Tests and distribution checks
     runs-on: ubuntu-latest
-    
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -19,17 +21,49 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
+          cache: pip
 
-      - name: Install build dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install build
+          pip install -r requirements.txt -r requirements-web.txt
+          pip install pytest==9.1.1 build twine
 
-      - name: Build Source and Wheel distributions
-        run: python -m build
+      - name: Verify the tag matches the code version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          test "${GITHUB_REF_NAME#v}" = "$(python -c 'from core.version import __version__; print(__version__)')"
 
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Tests
+        run: python -m pytest tests/ -q
+
+      - name: Build and check distributions
+        run: |
+          python -m build
+          twine check dist/*
+          python scripts/check_dist.py dist/*
+
+      - name: Keep the verified distributions
+        uses: actions/upload-artifact@v4
         with:
-          user: __token__
-          password: ${{ secrets.PYPI_API_TOKEN }}
+          name: dist
+          path: dist/*
+          if-no-files-found: error
+
+  pypi-publish:
+    name: Upload release to PyPI
+    needs: [verify]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Download the distributions that were verified
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: Publish to PyPI (trusted publishing, OIDC only — no API tokens)
+        uses: pypa/gh-action-pypi-publish@release/v1

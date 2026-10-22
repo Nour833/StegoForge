@@ -1,37 +1,68 @@
 """
-core/image/lsb.py — LSB (Least Significant Bit) steganography for images.
+core/image/lsb.py — LSB (least significant bit) steganography for raster images.
 
-Supports: PNG, BMP, RGBA variants
-Supports: 1–4 bit depth, any channel order, polymorphic traversal.
+Supports PNG, BMP, TIFF and (lossless) WebP carriers in RGB / RGBA / L / LA,
+1-4 bits per sample, sequential or key-seeded traversal.
 
-Wire format embedded in pixels:
-  [4 bytes big-endian uint32: payload length][payload bytes]
+Wire format embedded in the samples::
 
-Capacity at depth=1: (width × height × channels) / 8 bytes
+    [4-byte big-endian payload length][payload bytes]
+
+written MSB-first, ``depth`` bits per sample, into the low bits of each sample.
+The final group is zero-padded so the decoder (which reads whole groups) stays
+in sync.
+
+Traversal order
+---------------
+* no key  — samples in file order;
+* ``v2``  — every new keyed embed: a key-seeded permutation of *all* samples
+  (frozen ``RandomState`` stream, see ``core/crypto/polymorphic.py``);
+* ``legacy`` — what StegoForge <= 1.1.5 wrote for keyed embeds: half of all
+  keys produced a reversed sequential scan and the rest an LCG shuffle. Kept
+  for decoding only; a keyed decode tries ``v2`` first, then ``legacy``.
 """
+from __future__ import annotations
+
 import io
-import struct
+import warnings
+
 import numpy as np
 from PIL import Image
 
 from core.base import BaseEncoder
-from core.crypto.polymorphic import derive_encoding_params, fisher_yates_indices
+from core.bits import (
+    bits_to_bytes_np,
+    bytes_to_bits_np,
+    pack_depth_chunks_np,
+    unpack_depth_chunks_np,
+    validate_depth,
+    validate_payload_not_empty,
+)
+from core.config import get_config
+from core.crypto.polymorphic import derive_encoding_params, fisher_yates_indices, keyed_permutation
 
-HEADER_FMT = ">I"
 HEADER_SIZE = 4
+MAX_PAYLOAD = 100_000_000          # sanity cap on a declared payload length
+_SAVE_FORMATS = {"PNG", "BMP", "TIFF", "WEBP"}
+_CHANNELS = {"L": 1, "LA": 2, "RGB": 3, "RGBA": 4}
+_NATIVE_MODES = tuple(_CHANNELS)
 
 
 class LSBEncoder(BaseEncoder):
     name = "lsb"
     supported_extensions = [".png", ".bmp", ".tiff", ".webp"]
 
+    def output_suffix(self, carrier_suffix: str) -> str:
+        s = carrier_suffix.lower()
+        return s if s in (".png", ".bmp", ".tiff", ".webp") else (".tiff" if s == ".tif" else ".png")
+
+    # ── public API ────────────────────────────────────────────────────────────
+
     def capacity(self, carrier_bytes: bytes, depth: int = 1, **kwargs) -> int:
-        """Return maximum payload bytes (excluding 4-byte header)."""
-        img = self._load_image(carrier_bytes)
-        arr = np.array(img)
-        total_channels = arr.size  # width * height * channels
-        total_bits = total_channels * depth
-        return (total_bits // 8) - HEADER_SIZE
+        """Maximum payload bytes (excluding the 4-byte length header)."""
+        validate_depth(depth)
+        w, h, channels, _ = self._probe(carrier_bytes)
+        return max(0, (w * h * channels * depth) // 8 - HEADER_SIZE)
 
     def encode(
         self,
@@ -41,70 +72,28 @@ class LSBEncoder(BaseEncoder):
         key: str | None = None,
         **kwargs,
     ) -> bytes:
-        """
-        Embed payload_bytes into carrier image.
-
-        Args:
-            carrier_bytes: Raw image file bytes.
-            payload_bytes: Data to hide (already encrypted by caller).
-            depth: Bits per channel to use (1–4). Higher = more capacity, less invisible.
-            key: If provided, use polymorphic pixel traversal seeded by key.
-
-        Returns:
-            Stego image bytes in the same format as the carrier.
-        """
-        img = self._load_image(carrier_bytes)
-        fmt = img.format or "PNG"
+        """Embed ``payload_bytes`` (already encrypted by the caller) into the carrier."""
+        validate_depth(depth)
+        validate_payload_not_empty(payload_bytes)
+        img, fmt = self._load_image(carrier_bytes)
         arr = np.array(img, dtype=np.uint8)
-        flat = arr.flatten()
+        flat = arr.reshape(-1)
 
-        cap = self.capacity(carrier_bytes, depth=depth)
+        cap = max(0, (flat.size * depth) // 8 - HEADER_SIZE)
         if len(payload_bytes) > cap:
-            raise ValueError(
-                f"Payload too large: {len(payload_bytes)} bytes, capacity: {cap} bytes"
-            )
+            raise ValueError(f"Payload too large: {len(payload_bytes)} bytes, capacity: {cap} bytes")
 
-        # Prepend 4-byte length header
-        data = struct.pack(HEADER_FMT, len(payload_bytes)) + payload_bytes
-        bits = _bytes_to_bits(data)
-
-        # Build traversal order
-        indices = self._build_indices(flat, key)
-
-        # Embed bits into flat array
-        mask = (0xFF << depth) & 0xFF  # mask to clear lower `depth` bits
-        bit_idx = 0
-        for idx in indices:
-            if bit_idx >= len(bits):
-                break
-            chunk = bits[bit_idx:bit_idx + depth]
-            chunk_val = _bits_to_int(chunk)
-            flat[idx] = (flat[idx] & mask) | chunk_val
-            bit_idx += depth
-
-        stego_arr = flat.reshape(arr.shape)
-        stego_img = Image.fromarray(stego_arr, mode=img.mode)
-
-        buf = io.BytesIO()
-        save_kwargs = {}
-        if fmt.upper() == "PNG":
-            save_kwargs["format"] = "PNG"
-            # Preserve DPI and other info
-            if hasattr(img, "info"):
-                if "dpi" in img.info:
-                    save_kwargs["dpi"] = img.info["dpi"]
-        elif fmt.upper() in ("TIFF", "TIF"):
-            save_kwargs["format"] = "TIFF"
-        elif fmt.upper() == "BMP":
-            save_kwargs["format"] = "BMP"
-        elif fmt.upper() == "WEBP":
-            save_kwargs["format"] = "WEBP"
-            save_kwargs["lossless"] = True
+        data = len(payload_bytes).to_bytes(HEADER_SIZE, "big") + bytes(payload_bytes)
+        chunks = pack_depth_chunks_np(bytes_to_bits_np(data), depth)
+        order = self._traversal(flat.size, key, kwargs.get("traversal", "v2"))
+        mask = np.uint8((0xFF << depth) & 0xFF)
+        if order is None:
+            flat[:len(chunks)] = (flat[:len(chunks)] & mask) | chunks
         else:
-            save_kwargs["format"] = "PNG"
+            idx = order[:len(chunks)]
+            flat[idx] = (flat[idx] & mask) | chunks
 
-        stego_img.save(buf, **save_kwargs)
-        return buf.getvalue()
+        return self._save(arr, fmt, img.info)
 
     def decode(
         self,
@@ -113,97 +102,102 @@ class LSBEncoder(BaseEncoder):
         key: str | None = None,
         **kwargs,
     ) -> bytes:
-        """
-        Extract payload from stego image.
+        """Extract the payload.
 
         Raises:
-            ValueError: If no valid payload found or header is invalid.
+            ValueError: no valid payload header / declared length impossible.
         """
-        img = self._load_image(stego_bytes)
-        arr = np.array(img, dtype=np.uint8)
-        flat = arr.flatten()
+        validate_depth(depth)
+        img, _ = self._load_image(stego_bytes)
+        flat = np.array(img, dtype=np.uint8).reshape(-1)
 
-        indices = self._build_indices(flat, key)
+        last_exc: ValueError | None = None
+        for scheme in (("v2", "legacy") if key else ("plain",)):
+            try:
+                return self._decode_with(flat, depth, self._traversal(flat.size, key, scheme))
+            except ValueError as exc:
+                last_exc = exc
+        raise last_exc if last_exc is not None else ValueError("LSB decode failed")
 
-        # Extract bits — enough for header first
-        header_bits_needed = HEADER_SIZE * 8
-        bits = []
-        for idx in indices:
-            if len(bits) >= header_bits_needed:
-                break
-            val = flat[idx]
-            for bit_pos in range(depth - 1, -1, -1):
-                bits.append((val >> bit_pos) & 1)
+    # ── internals ─────────────────────────────────────────────────────────────
 
-        if len(bits) < header_bits_needed:
+    @staticmethod
+    def _decode_with(flat: np.ndarray, depth: int, order: np.ndarray | None) -> bytes:
+        low = np.uint8((1 << depth) - 1)
+        hdr_groups = -(-HEADER_SIZE * 8 // depth)
+        if flat.size < hdr_groups:
             raise ValueError("Carrier too small to contain a valid payload header")
 
-        length_bytes = _bits_to_bytes(bits[:header_bits_needed])
-        length = struct.unpack(HEADER_FMT, length_bytes)[0]
+        def read(groups: int) -> np.ndarray:
+            vals = flat[:groups] if order is None else flat[order[:groups]]
+            return unpack_depth_chunks_np(vals & low, depth)
 
-        if length == 0 or length > 100_000_000:  # sanity: max 100MB
+        length = int.from_bytes(bits_to_bytes_np(read(hdr_groups)[:HEADER_SIZE * 8]), "big")
+        if length == 0 or length > MAX_PAYLOAD:
             raise ValueError(f"Invalid payload length in header: {length}")
-
-        # Extract all payload bits
-        total_bits_needed = (HEADER_SIZE + length) * 8
-        bits = []
-        for idx in indices:
-            if len(bits) >= total_bits_needed:
-                break
-            val = flat[idx]
-            for bit_pos in range(depth - 1, -1, -1):
-                bits.append((val >> bit_pos) & 1)
-
-        if len(bits) < total_bits_needed:
+        total_bits = (HEADER_SIZE + length) * 8
+        groups = -(-total_bits // depth)
+        if groups > flat.size:
             raise ValueError("Carrier does not contain enough data for declared payload length")
+        return bits_to_bytes_np(read(groups)[HEADER_SIZE * 8:total_bits])
 
-        payload = _bits_to_bytes(bits[header_bits_needed:total_bits_needed])
-        return payload
+    @staticmethod
+    def _traversal(n: int, key: str | None, scheme: str) -> np.ndarray | None:
+        """Sample visit order: ``None`` means plain file order."""
+        if not key or scheme == "plain":
+            return None
+        if scheme not in ("v2", "legacy"):
+            raise ValueError(f"Unknown traversal scheme: {scheme!r}")
+        if n > get_config().max_keyed_samples:
+            raise ValueError(
+                "Carrier is too large for a keyed traversal "
+                f"({n:,} samples > {get_config().max_keyed_samples:,}); use a smaller image or no key"
+            )
+        params = derive_encoding_params(key)
+        if scheme == "v2":
+            return keyed_permutation(n, params["shuffle_seed"])
+        if params["row_reversed"]:
+            return np.arange(n - 1, -1, -1, dtype=np.int64)
+        return np.asarray(fisher_yates_indices(n, params["shuffle_seed"]), dtype=np.int64)
 
-    def _load_image(self, data: bytes) -> Image.Image:
-        """Load image from bytes, converting to RGB or RGBA."""
-        img = Image.open(io.BytesIO(data))
-        if img.mode not in ("RGB", "RGBA", "L", "LA"):
-            if img.mode == "P":
-                img = img.convert("RGBA")
-            else:
-                img = img.convert("RGB")
-        return img
+    @staticmethod
+    def _probe(data: bytes) -> tuple[int, int, int, str | None]:
+        """(width, height, channels after normalisation, source format) without decoding pixels."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", Image.DecompressionBombWarning)
+            img = Image.open(io.BytesIO(data))
+        w, h = img.size
+        if w * h > get_config().max_image_pixels:
+            raise ValueError(f"Image too large ({w}x{h} px exceeds the {get_config().max_image_pixels:,} pixel limit)")
+        mode = img.mode
+        if mode not in _NATIVE_MODES:
+            mode = "RGBA" if mode == "P" else "RGB"
+        return w, h, _CHANNELS[mode], img.format
 
-    def _build_indices(self, flat: np.ndarray, key: str | None) -> list[int]:
-        """Return traversal order for flat pixel array."""
-        n = len(flat)
-        if key:
-            params = derive_encoding_params(key)
-            if params["row_reversed"]:
-                indices = list(range(n - 1, -1, -1))
-            else:
-                indices = fisher_yates_indices(n, params["shuffle_seed"])
-        else:
-            indices = list(range(n))
-        return indices
+    def _load_image(self, data: bytes) -> tuple[Image.Image, str]:
+        """Open and normalise to RGB/RGBA/L/LA. Returns (image, output format)."""
+        self._probe(data)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", Image.DecompressionBombWarning)
+            opened = Image.open(io.BytesIO(data))
+            fmt = (opened.format or "PNG").upper()
+            opened.load()
+        img: Image.Image = opened
+        if img.mode not in _NATIVE_MODES:
+            img = img.convert("RGBA" if img.mode == "P" else "RGB")
+        return img, (fmt if fmt in _SAVE_FORMATS else "PNG")
 
-
-# ── Bit manipulation helpers ──────────────────────────────────────────────────
-
-def _bytes_to_bits(data: bytes) -> list[int]:
-    bits = []
-    for byte in data:
-        for i in range(7, -1, -1):
-            bits.append((byte >> i) & 1)
-    return bits
-
-
-def _bits_to_int(bits: list[int]) -> int:
-    val = 0
-    for b in bits:
-        val = (val << 1) | b
-    return val
-
-
-def _bits_to_bytes(bits: list[int]) -> bytes:
-    result = []
-    for i in range(0, len(bits) - 7, 8):
-        byte_bits = bits[i:i + 8]
-        result.append(_bits_to_int(byte_bits))
-    return bytes(result)
+    @staticmethod
+    def _save(arr: np.ndarray, fmt: str, info: dict) -> bytes:
+        out = Image.fromarray(arr)
+        kwargs: dict = {"format": fmt}
+        if fmt == "PNG":
+            for k in ("dpi", "icc_profile"):
+                if k in info:
+                    kwargs[k] = info[k]
+        elif fmt == "WEBP":
+            # exact=True: libwebp otherwise zeroes RGB under fully transparent pixels.
+            kwargs.update(lossless=True, exact=True)
+        buf = io.BytesIO()
+        out.save(buf, **kwargs)
+        return buf.getvalue()

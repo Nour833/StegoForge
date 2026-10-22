@@ -82,12 +82,17 @@ class TCPCovertEncoder(BaseEncoder):
 
         # Artifact mode decode.
         if len(stego_bytes) < HEADER_SIZE:
-            stego_bytes = b""
+            raise ValueError("No TCP covert payload found")
 
         if stego_bytes.startswith(MAGIC):
-            magic, channel_id, _, length = struct.unpack(HEADER_FMT, stego_bytes[:HEADER_SIZE])
+            try:
+                magic, channel_id, _, length = struct.unpack(HEADER_FMT, stego_bytes[:HEADER_SIZE])
+            except struct.error as exc:
+                raise ValueError(f"Invalid TCP covert payload format: {exc}") from exc
             if magic != MAGIC or channel_id not in INV_CHANNELS:
                 raise ValueError("Invalid TCP covert payload format")
+            if length <= 0 or length > 2_000_000:
+                raise ValueError(f"Invalid TCP covert payload length: {length}")
             payload = stego_bytes[HEADER_SIZE:HEADER_SIZE + length]
             if len(payload) < length:
                 raise ValueError("Incomplete TCP covert payload")
@@ -103,9 +108,24 @@ class TCPCovertEncoder(BaseEncoder):
             raise ValueError("No TCP covert payload found")
         if channel not in CHANNELS:
             raise ValueError("channel must be one of: ip_id, tcp_seq, ttl")
+        import ipaddress
+
+        try:
+            ipaddress.ip_address(str(listen_ip))
+        except ValueError:
+            raise ValueError(f"Invalid listen-ip: {listen_ip!r}")
+        try:
+            listen_port = int(listen_port)
+            if not (0 < listen_port < 65536):
+                raise ValueError()
+        except ValueError:
+            raise ValueError(f"Invalid listen-port: {kwargs.get('listen_port')!r}")
 
         _, _, _, _, sniff = _scapy()
-        filt = f"tcp and dst host {listen_ip} and dst port {int(listen_port)}"
+        from core.network.guard import bpf_filter, validate_listen_target
+
+        listen_ip_v, listen_port_v = validate_listen_target(listen_ip, listen_port)
+        filt = bpf_filter(listen_ip_v, listen_port_v)
         packets = sniff(filter=filt, timeout=timeout, count=(expected_packets if expected_packets > 0 else 0))
         if not packets:
             raise ValueError("No covert packets captured")

@@ -22,6 +22,9 @@ def _require_reedsolo():
 
 
 def encode_wet_paper(payload_bytes: bytes, redundancy_bytes: int = 32) -> bytes:
+    from core.bits import validate_payload_not_empty
+
+    validate_payload_not_empty(payload_bytes, what="Wet-paper payload")
     RSCodec = _require_reedsolo()
     nsym = int(max(4, min(128, redundancy_bytes)))
     rsc = RSCodec(nsym)
@@ -35,7 +38,10 @@ def decode_wet_paper(data: bytes) -> tuple[bytes, int, bool]:
         return data, 0, False
 
     RSCodec = _require_reedsolo()
-    magic, nsym, original_len, encoded_len = struct.unpack(HEADER_FMT, data[:HEADER_SIZE])
+    try:
+        magic, nsym, original_len, encoded_len = struct.unpack(HEADER_FMT, data[:HEADER_SIZE])
+    except struct.error as exc:
+        raise ValueError(f"Corrupted wet paper payload header: {exc}") from exc
     if magic != MAGIC:
         return data, 0, False
 
@@ -44,7 +50,10 @@ def decode_wet_paper(data: bytes) -> tuple[bytes, int, bool]:
         raise ValueError("Corrupted wet paper payload header")
 
     rsc = RSCodec(nsym)
-    decoded = rsc.decode(blob)
+    try:
+        decoded = rsc.decode(blob)
+    except Exception as exc:
+        raise ValueError(f"Corrupted wet paper payload (error correction failed): {exc}") from exc
 
     corrected = 0
     if isinstance(decoded, tuple):

@@ -3,10 +3,14 @@ detect/document_anomaly.py - Lightweight document stego anomaly detector.
 """
 from __future__ import annotations
 
+import logging
+
 import io
 import zipfile
 
 from detect.base import BaseDetector, DetectionResult
+
+log = logging.getLogger(__name__)
 
 
 class DocumentAnomalyDetector(BaseDetector):
@@ -41,13 +45,13 @@ class DocumentAnomalyDetector(BaseDetector):
         zw_ratio = zw / total_chars
         trailing_ratio = trailing / max(1, len(lines))
         conf = min(1.0, (zw_ratio * 45.0) + (trailing_ratio * 0.8))
-        
+
         extracted = None
         try:
             from core.document.unicode_ws import UnicodeWSEncoder
             extracted = UnicodeWSEncoder().decode(file_bytes)
-        except Exception:
-            pass
+        except Exception as _exc:
+            log.debug("suppressed: %s", _exc)
 
         if extracted is not None:
             conf = 1.0
@@ -106,14 +110,14 @@ class DocumentAnomalyDetector(BaseDetector):
             suspicious += 0.08
 
         conf = min(1.0, suspicious)
-        
+
         extracted = None
         try:
             from core.document.office import OfficeEncoder
             extracted = OfficeEncoder().decode(file_bytes)
-        except Exception:
-            pass
-            
+        except Exception as _exc:
+            log.debug("suppressed: %s", _exc)
+
         if extracted is not None:
             conf = 1.0
             findings.insert(0, {

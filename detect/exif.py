@@ -17,11 +17,13 @@ Checks:
 Each finding has a suspicion level: 'low', 'medium', 'high'.
 """
 import io
+import logging
 import os
 import zipfile
-import struct
 
 from detect.base import BaseDetector, DetectionResult
+
+log = logging.getLogger(__name__)
 
 try:
     import piexif
@@ -108,7 +110,7 @@ class EXIFDetector(BaseDetector):
         )
 
     def _scan_jpeg_exif(self, file_bytes: bytes) -> list[dict]:
-        findings = []
+        findings: list[dict] = []
         if not HAS_PIEXIF:
             return findings
         try:
@@ -151,12 +153,12 @@ class EXIFDetector(BaseDetector):
                             "value": str(value),
                         })
 
-        except Exception:
-            pass
+        except Exception as _exc:
+            log.debug("suppressed: %s", _exc)
         return findings
 
     def _scan_pil_meta(self, file_bytes: bytes) -> list[dict]:
-        findings = []
+        findings: list[dict] = []
         if not HAS_PIL:
             return findings
         try:
@@ -165,14 +167,14 @@ class EXIFDetector(BaseDetector):
             # Check PNG text chunks
             if img.format == "PNG" and hasattr(img, "info"):
                 for key, val in img.info.items():
-                    if key.lower() in ("comment", "description", "author", "copyright", "url"):
-                        if val and str(val).strip():
-                            findings.append({
-                                "field": f"PNG {key} chunk",
-                                "description": f"Non-empty PNG text chunk '{key}': {str(val)[:100]}",
-                                "suspicion": "medium",
-                                "value": str(val)[:200],
-                            })
+                    if (str(key).lower() in ("comment", "description", "author", "copyright", "url")
+                            and val and str(val).strip()):
+                        findings.append({
+                            "field": f"PNG {key} chunk",
+                            "description": f"Non-empty PNG text chunk '{key}': {str(val)[:100]}",
+                            "suspicion": "medium",
+                            "value": str(val)[:200],
+                        })
                     # Any non-standard key is suspicious
                     if key not in ("dpi", "gamma", "icc_profile", "transparency",
                                    "background", "exif", "xmp", "photoshop"):
@@ -205,12 +207,12 @@ class EXIFDetector(BaseDetector):
                         "value": "thumbnail present",
                     })
 
-        except Exception:
-            pass
+        except Exception as _exc:
+            log.debug("suppressed: %s", _exc)
         return findings
 
     def _scan_pdf(self, file_bytes: bytes) -> list[dict]:
-        findings = []
+        findings: list[dict] = []
         if not HAS_PYPDF:
             return findings
         try:
@@ -227,19 +229,18 @@ class EXIFDetector(BaseDetector):
                     })
                 # Check other metadata fields
                 for key, val in meta.items():
-                    if key in ("/Producer", "/Creator", "/Author", "/Title", "/Subject"):
-                        if val:
-                            val_lower = str(val).lower()
-                            for tool in STEGO_TOOLS:
-                                if tool in val_lower:
-                                    findings.append({
-                                        "field": f"PDF {key}",
-                                        "description": f"Stego tool signature in {key}: {val}",
-                                        "suspicion": "high",
-                                        "value": str(val),
-                                    })
-        except Exception:
-            pass
+                    if key in ("/Producer", "/Creator", "/Author", "/Title", "/Subject") and val:
+                        val_lower = str(val).lower()
+                        for tool in STEGO_TOOLS:
+                            if tool in val_lower:
+                                findings.append({
+                                    "field": f"PDF {key}",
+                                    "description": f"Stego tool signature in {key}: {val}",
+                                    "suspicion": "high",
+                                    "value": str(val),
+                                })
+        except Exception as _exc:
+            log.debug("suppressed: %s", _exc)
         return findings
 
     def _scan_office(self, file_bytes: bytes) -> list[dict]:

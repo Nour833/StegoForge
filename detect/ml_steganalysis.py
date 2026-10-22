@@ -10,6 +10,8 @@ Training note for maintainers:
 """
 from __future__ import annotations
 
+import logging
+
 import io
 import os
 import sys
@@ -19,6 +21,8 @@ import numpy as np
 from PIL import Image
 
 from detect.base import BaseDetector, DetectionResult
+
+log = logging.getLogger(__name__)
 
 MODEL_BUNDLED_REL = Path(os.getenv("STEGOFORGE_ML_BUNDLED_MODEL", "models/model_quantized.onnx").strip())
 MODEL_NAME = MODEL_BUNDLED_REL.name or "model_quantized.onnx"
@@ -38,8 +42,8 @@ def bundled_model_paths() -> list[Path]:
     # Side-by-side next to executable/script.
     try:
         candidates.append((Path(sys.argv[0]).resolve().parent / MODEL_BUNDLED_REL).resolve())
-    except Exception:
-        pass
+    except Exception as _exc:
+        log.debug("suppressed: %s", _exc)
 
     # Keep order but remove duplicates.
     deduped: list[Path] = []
@@ -50,6 +54,30 @@ def bundled_model_paths() -> list[Path]:
             deduped.append(p)
             seen.add(key)
     return deduped
+
+
+def verify_model_sidecar(model_path: Path) -> tuple[bool, str]:
+    """Verify optional .sha256 sidecar next to model weights.
+
+    Returns (ok, note). Missing sidecar → (True, "no sidecar — see assets.sha256").
+    Mismatch → (False, ...). This is integrity, not authenticity (no sig infra).
+    """
+    import hashlib
+
+    sidecar = model_path.with_suffix(model_path.suffix + ".sha256")
+    if not sidecar.exists():
+        return True, "no sidecar — see assets.sha256"
+    try:
+        expected = sidecar.read_text(encoding="utf-8").split()[0].strip().lower()
+    except OSError as exc:
+        return False, f"sidecar unreadable: {exc}"
+    h = hashlib.sha256()
+    with open(model_path, "rb") as f:
+        for blk in iter(lambda: f.read(65536), b""):
+            h.update(blk)
+    if h.hexdigest().lower() == expected:
+        return True, "sidecar sha256 match"
+    return False, "sidecar sha256 MISMATCH"
 
 
 class MLSteganalysisDetector(BaseDetector):
@@ -148,7 +176,7 @@ class MLSteganalysisDetector(BaseDetector):
         w = self._shape_dim(input_shape[3] if len(input_shape) > 3 else None, 224)
 
         img = Image.open(io.BytesIO(file_bytes)).convert("RGB")
-        img = img.resize((w, h), Image.BILINEAR)
+        img = img.resize((w, h), Image.Resampling.BILINEAR)
         arr = np.asarray(img, dtype=np.float32) / 255.0
 
         if c <= 1:
@@ -186,6 +214,13 @@ class MLSteganalysisDetector(BaseDetector):
         # Preferred path: bundled offline model shipped with repo/release.
         for bundled in bundled_model_paths():
             if bundled.exists() and bundled.stat().st_size > 0:
+                ok, note = verify_model_sidecar(bundled)
+                if not ok:
+                    self._last_model_error = f"Model integrity failure: {note}"
+                    log.warning("ML model sidecar mismatch for %s", bundled)
+                    continue
+                if note != "no sidecar — see assets.sha256":
+                    log.debug("ML model sidecar: %s", note)
                 return bundled
 
         try:
@@ -207,17 +242,24 @@ class MLSteganalysisDetector(BaseDetector):
 
     def _heuristic_fallback(self, file_bytes: bytes, classical: dict, reason: str, install: str | None = None) -> DetectionResult:
         # Fallback keeps the detector operational when model/runtime is unavailable.
+        # Calibrated 2026-09-22: texture alone cannot separate clean from stego
+        # (both score <=0.27), and blending chi2/rs priors here double-counts
+        # standalone detectors AND launders their borderline scores into ml
+        # false positives (measured FPR 0.40 via prior boost). So the fallback
+        # reports the texture signal only, never fires alone, and names the
+        # priors consulted without scoring them.
         img = Image.open(io.BytesIO(file_bytes)).convert("L")
         arr = np.array(img, dtype=np.float32) / 255.0
         hp = np.abs(arr[:, 1:] - arr[:, :-1]).mean() + np.abs(arr[1:, :] - arr[:-1, :]).mean()
-        texture_conf = float(np.clip((hp - 0.20) * 1.8, 0.0, 1.0))
-        classical_conf = max(float(classical.get("chi2", 0.0) or 0.0), float(classical.get("rs", 0.0) or 0.0))
-        conf = float(np.clip(0.6 * texture_conf + 0.4 * classical_conf, 0.0, 1.0))
+        conf = float(np.clip((hp - 0.20) * 1.8, 0.0, 1.0))
 
+        # Fallback flag threshold is 0.5 (NOT the 0.35 used by real model
+        # weights): photographic content — clean or stego — scores ~0.44,
+        # so 0.35 would false-positive on ordinary photos.
         verdict = "CLEAN"
-        if conf >= 0.7:
+        if conf >= 0.8:
             verdict = "LIKELY_STEGO"
-        elif conf >= 0.35:
+        elif conf >= 0.5:
             verdict = "SUSPICIOUS"
 
         details = {
@@ -227,6 +269,11 @@ class MLSteganalysisDetector(BaseDetector):
             "model_source": "fallback",
             "skipped": False,
             "fallback_reason": reason,
+            "priors_consulted": {
+                "chi2": float(classical.get("chi2", 0.0) or 0.0),
+                "rs": float(classical.get("rs", 0.0) or 0.0),
+            },
+            "note": "Fallback is triage-only: it cannot distinguish clean from stego alone (see DETECTOR-EVAL.md). Corroborate with blind/chi2/rs.",
             "interpretation": f"Heuristic ML fallback verdict: {verdict}",
         }
         if "Incompatible ONNX model" in reason:
@@ -236,7 +283,7 @@ class MLSteganalysisDetector(BaseDetector):
 
         return DetectionResult(
             method=self.name,
-            detected=conf >= 0.35,
+            detected=conf >= 0.5,
             confidence=round(conf, 4),
             details=details,
         )
@@ -246,10 +293,10 @@ class MLSteganalysisDetector(BaseDetector):
         chi2_conf = float(classical.get("chi2", 0.0) or 0.0)
         rs_conf = float(classical.get("rs", 0.0) or 0.0)
 
-        if ml_conf >= 0.7 and chi2_conf < 0.3 and rs_conf < 0.3:
+        if ml_conf >= 0.8 and chi2_conf < 0.3 and rs_conf < 0.3:
             hints.append("Adaptive LSB or DCT-like embedding is plausible")
-        if ml_conf >= 0.7 and (chi2_conf >= 0.6 or rs_conf >= 0.6):
+        if ml_conf >= 0.8 and (chi2_conf >= 0.6 or rs_conf >= 0.6):
             hints.append("Uniform LSB-style embedding is plausible")
-        if not hints and ml_conf >= 0.35:
+        if not hints and ml_conf >= 0.5:
             hints.append("Potential stego artifact detected by learned features")
         return hints

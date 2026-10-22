@@ -2,22 +2,24 @@
 from PyInstaller.utils.hooks import collect_data_files
 
 datas = collect_data_files('onnxruntime')
-# Also pack StegoForge web assets
-datas.append(('web/templates/*', 'web/templates'))
-datas.append(('web/static/*', 'web/static'))
+# Also pack StegoForge web assets (recursive Trees so subdirs are included)
+datas.append(('web/templates', 'web/templates'))
+datas.append(('web/static', 'web/static'))
 # Bundle offline ML model so release works without network dependency.
 datas.append(('models/model_quantized.onnx', 'models'))
+datas.append(('assets.sha256', '.'))
+datas.append(('stegoforge_ops/schemas', 'stegoforge_ops/schemas'))
 
 a = Analysis(
     ['stegoforge.py'],
     pathex=[],
     binaries=[],
     datas=datas,
-    hiddenimports=[], # Removed conflicting hidden import
+    hiddenimports=['PIL', 'PIL.Image', 'av', 'onnxruntime', 'numpy', 'scipy'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['imageio_ffmpeg'],
+    excludes=[],
     noarchive=False,
     optimize=0,
 )
@@ -31,7 +33,7 @@ kwargs = dict(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,  # UPX-packed binaries are routinely flagged by antivirus engines
     upx_exclude=[],
     runtime_tmpdir=None,
     console=True,

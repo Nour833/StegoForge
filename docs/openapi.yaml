@@ -1,0 +1,133 @@
+openapi: 3.0.3
+info:
+  title: StegoForge Web API
+  version: 1.5.0
+  description: Localhost steganography toolkit UI. Auth via X-Stego-Token header or ?token= when STEGOFORGE_WEB_TOKEN is set.
+servers:
+  - url: http://127.0.0.1:5000
+security:
+  - stegoToken: []
+components:
+  securitySchemes:
+    stegoToken:
+      type: apiKey
+      in: header
+      name: X-Stego-Token
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+    CapacityRow:
+      type: object
+      properties:
+        method: {type: string}
+        capacity_bytes: {type: integer}
+        capacity_kb: {type: number}
+        utilization_pct: {type: number}
+paths:
+  /:
+    get:
+      summary: Web UI
+      responses:
+        '200': {description: HTML UI}
+  /survive:
+    get:
+      summary: Survive tab
+      responses:
+        '200': {description: HTML UI}
+  /artifact/{id}:
+    get:
+      summary: Fetch stego artifact by opaque ID
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+      responses:
+        '200': {description: Artifact bytes}
+        '404': {description: Unknown/expired artifact, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+  /api/platform-profiles:
+    get:
+      summary: List platform survival profiles
+      responses:
+        '200': {description: Profiles map}
+  /api/capacity-matrix:
+    post:
+      summary: Capacity matrix across methods
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: {type: string, format: binary}
+                payload: {type: string, format: binary}
+                depth: {type: integer, minimum: 1, maximum: 4}
+      responses:
+        '200': {description: Rows sorted by capacity}
+        '400': {description: Usage error, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+  /api/survive:
+    post:
+      summary: Encode + simulate platform pipeline
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                carrier: {type: string, format: binary}
+                payload: {type: string, format: binary}
+                key: {type: string}
+                target: {type: string}
+                method: {type: string}
+                depth: {type: integer, minimum: 1, maximum: 4}
+      responses:
+        '200': {description: op_encode result with survival_test}
+  /api/encode-stream:
+    post:
+      summary: Encode with SSE progress (progress/success/error events)
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                carrier: {type: string, format: binary}
+                payload: {type: string, format: binary}
+      responses:
+        '200': {description: text/event-stream}
+  /api/detect-stream:
+    post:
+      summary: Detect with SSE log events
+      responses:
+        '200': {description: text/event-stream}
+  /encode:
+    post:
+      summary: Encode, download stego bytes
+      responses:
+        '200': {description: Stego file}
+  /decode:
+    post:
+      summary: Decode, download payload
+      responses:
+        '200': {description: Payload file}
+  /detect:
+    post:
+      summary: Run detectors
+      responses:
+        '200': {description: File + results}
+  /ctf:
+    post:
+      summary: Full CTF report
+      responses:
+        '200': {description: Verdict + results}
+  /capacity:
+    post:
+      summary: Single-method capacity
+      responses:
+        '200': {description: op_capacity result}
+  /diff:
+    post:
+      summary: Carrier vs stego diff
+      responses:
+        '200': {description: op_diff result}

@@ -9,24 +9,54 @@ The chi-square test measures this equalization: a p-value close to 1.0
 indicates uniform LSB distribution = likely LSB steganography.
 
 Confidence score: 0.0 = natural image, 1.0 = almost certainly stego.
+
+How the verdict is reached
+==========================
+The classic test only fires when *the whole image* is embedded. StegoForge's
+unkeyed LSB embed is sequential, so a payload equalises a **prefix** of the
+sample stream and leaves the tail untouched. The detector therefore
+
+* scans prefix windows (the full stream, then halves, quarters, ...) and keeps
+  the best p-value (``p_head``), and
+* tests the untouched tail (the last quarter, ``p_tail``).
+
+``p_head`` is evidence only when the tail is *clearly not equalised*
+(``p_tail < TAIL_MAX_P``): then the carrier has real pair statistics and a
+prefix that has lost them has been modified. If the tail is equalised as well
+(noise-like carrier, or a payload filling the image) the test cannot tell clean
+from stego, so it reports ``reliable=False`` with confidence 0.0 instead of
+guessing. Pairs with fewer than ``MIN_PAIR_TOTAL`` samples are skipped (the
+chi-square approximation needs an expected count of at least 5) and constant
+planes, such as an opaque alpha channel, are excluded: they add a term as large
+as the pixel count and would mask every embed.
 """
 import io
 import os
 
 import numpy as np
 from scipy.stats import chi2 as chi2_dist
-from scipy.fft import dct as scipy_dct
+from scipy.fft import dctn as scipy_dctn
 from PIL import Image
 
 from detect.base import BaseDetector, DetectionResult
 
 # Threshold above which we flag as detected.
 CONFIDENCE_THRESHOLD = 0.7
+# JPEG-DCT sub-signal threshold (calibrated 2026-09-22: clean JPEGs score
+# <=0.09, DCT embeds score >=0.55; spatial threshold stays at 0.7 because
+# clean high-entropy images reach 0.68 there).
+JPEG_DCT_THRESHOLD = 0.5
 
 JPEG_BLOCK = 8
 JPEG_TARGET_ROW = 4
 JPEG_TARGET_COL = 4
 JPEG_EMBED_FLOOR = 18.0
+
+MIN_PAIR_TOTAL = 10      # expected count per cell >= 5
+MIN_WINDOW = 2048        # smallest prefix window (samples)
+MAX_HALVINGS = 6         # full stream, 1/2, ... 1/64
+TAIL_FRACTION = 0.25
+TAIL_MAX_P = 0.01        # the untouched tail must be clearly non-equalised
 
 
 class Chi2Detector(BaseDetector):
@@ -35,12 +65,12 @@ class Chi2Detector(BaseDetector):
 
     def analyze(self, file_bytes: bytes, filename: str = "") -> DetectionResult:
         try:
-            img = Image.open(io.BytesIO(file_bytes))
-            if img.mode in ("RGBA", "LA", "PA") or "transparency" in img.info:
-                img = img.convert("RGBA")
+            opened = Image.open(io.BytesIO(file_bytes))
+            if opened.mode in ("RGBA", "LA", "PA") or "transparency" in opened.info:
+                img = opened.convert("RGBA")
                 channels = ["R", "G", "B", "A"]
             else:
-                img = img.convert("RGB")
+                img = opened.convert("RGB")
                 channels = ["R", "G", "B"]
         except Exception as e:
             return DetectionResult(
@@ -52,15 +82,8 @@ class Chi2Detector(BaseDetector):
 
         arr = np.array(img, dtype=np.int32)
 
-        p_value, chi2_stat, n_pairs = self._chi2_pvalue(arr.reshape(-1))
-        if n_pairs == 0:
-            return DetectionResult(
-                method=self.name,
-                detected=False,
-                confidence=0.0,
-                details={"error": "No valid pixel pairs found"},
-            )
-
+        # Constant planes (an opaque alpha channel) carry no LSB information.
+        live = [i for i in range(arr.shape[2]) if np.min(arr[:, :, i]) != np.max(arr[:, :, i])]
         channel_stats = {}
         for c_idx, c_name in enumerate(channels):
             c_pval, c_chi2, c_n_pairs = self._chi2_pvalue(arr[:, :, c_idx].reshape(-1))
@@ -69,22 +92,44 @@ class Chi2Detector(BaseDetector):
                     "chi2": round(float(c_chi2), 4),
                     "p_value": round(float(c_pval), 4),
                 }
+        stream = arr[:, :, live].reshape(-1) if live else np.empty(0, dtype=np.int32)
+
+        p_value, chi2_stat, n_pairs = self._chi2_pvalue(stream)
+        if n_pairs == 0:
+            return DetectionResult(
+                method=self.name,
+                detected=False,
+                confidence=0.0,
+                details={"error": "No valid pixel pairs found"},
+            )
+        p_head, head_fraction, p_tail = self._head_tail(stream)
+        reliable = p_tail is None or p_tail < TAIL_MAX_P
 
         jpeg_dct_confidence = 0.0
-        jpeg_dct_details = {}
+        jpeg_dct_details: dict = {}
         ext = os.path.splitext(filename)[1].lower() if filename else ""
-        is_jpeg = ext in (".jpg", ".jpeg") or str(getattr(img, "format", "")).upper() == "JPEG"
+        is_jpeg = ext in (".jpg", ".jpeg") or str(getattr(opened, "format", "")).upper() == "JPEG"
         if is_jpeg:
             jpeg_dct_confidence, jpeg_dct_details = self._jpeg_dct_signal(img)
 
-        spatial_confidence = float(p_value)
+        # Decoded JPEG pixels carry no LSB information (the codec rewrote them), so a
+        # spatial verdict on a JPEG could only be a false alarm: use the DCT signal alone.
+        spatial_confidence = 0.0 if is_jpeg or not reliable else float(p_head)
         confidence = max(spatial_confidence, jpeg_dct_confidence)
-        detected = confidence >= CONFIDENCE_THRESHOLD
+        detected = (
+            spatial_confidence >= CONFIDENCE_THRESHOLD
+            or jpeg_dct_confidence >= JPEG_DCT_THRESHOLD
+        )
 
-        if jpeg_dct_confidence >= CONFIDENCE_THRESHOLD and jpeg_dct_confidence >= spatial_confidence:
+        if jpeg_dct_confidence >= JPEG_DCT_THRESHOLD and jpeg_dct_confidence >= spatial_confidence:
             interpretation = "Potential JPEG DCT sign-pattern embedding detected"
         elif spatial_confidence >= CONFIDENCE_THRESHOLD:
             interpretation = "High probability of LSB steganography"
+        elif not is_jpeg and not reliable:
+            interpretation = (
+                "Pair statistics are equalised across the whole image (noise-like carrier or a "
+                "payload filling it): chi-square cannot tell clean from stego here"
+            )
         else:
             interpretation = "No significant LSB/DCT anomaly detected"
 
@@ -96,6 +141,10 @@ class Chi2Detector(BaseDetector):
                 "chi2_statistic": round(float(chi2_stat), 4),
                 "p_value": round(float(p_value), 4),
                 "n_pairs": n_pairs,
+                "p_head": round(float(p_head), 4),
+                "head_fraction": round(float(head_fraction), 6),
+                "p_tail": None if p_tail is None else round(float(p_tail), 6),
+                "reliable": bool(reliable),
                 "spatial_confidence": round(spatial_confidence, 4),
                 "jpeg_dct_confidence": round(jpeg_dct_confidence, 4),
                 "jpeg_dct": jpeg_dct_details,
@@ -105,21 +154,37 @@ class Chi2Detector(BaseDetector):
         )
 
     def _chi2_pvalue(self, values: np.ndarray) -> tuple[float, float, int]:
-        clipped = np.clip(values, 0, 255).astype(np.int32)
-        counts = np.bincount(clipped, minlength=256)
-        pairs = counts.reshape(-1, 2)
-        totals = np.sum(pairs, axis=1)
-
-        valid = totals > 0
-        n_pairs = int(np.sum(valid))
+        """Westfeld-Pfitzmann pair test. Returns ``(p_value, statistic, pairs_used)``."""
+        clipped = np.clip(values, 0, 255).astype(np.int64)
+        pairs = np.bincount(clipped, minlength=256).reshape(-1, 2)
+        pairs = pairs[pairs.sum(axis=1) >= MIN_PAIR_TOTAL]
+        n_pairs = int(len(pairs))
         if n_pairs == 0:
             return 0.0, 0.0, 0
 
-        valid_pairs = pairs[valid]
-        expected = np.sum(valid_pairs, axis=1) / 2.0
-        chi2_stat = float(np.sum(((valid_pairs[:, 0] - expected) ** 2 + (valid_pairs[:, 1] - expected) ** 2) / expected))
+        lo = pairs[:, 0].astype(np.float64)
+        hi = pairs[:, 1].astype(np.float64)
+        # per pair: ((a-e)^2 + (b-e)^2) / e with e = (a+b)/2  ==  (a-b)^2 / (a+b), one degree of freedom
+        chi2_stat = float(np.sum((lo - hi) ** 2 / (lo + hi)))
         p_value = float(chi2_dist.sf(chi2_stat, df=n_pairs))
         return p_value, chi2_stat, n_pairs
+
+    def _head_tail(self, stream: np.ndarray) -> tuple[float, float, float | None]:
+        """Best prefix-window p-value, the fraction it covers, and the tail p-value (None if too short)."""
+        total = int(stream.size)
+        best_p, best_fraction = 0.0, 1.0
+        for k in range(MAX_HALVINGS + 1):
+            n = total >> k
+            if n < MIN_WINDOW and k > 0:
+                break
+            p, _, used = self._chi2_pvalue(stream[:n])
+            if used and p >= best_p:
+                best_p, best_fraction = p, n / total
+        tail_n = int(total * TAIL_FRACTION)
+        if tail_n < MIN_WINDOW:
+            return best_p, best_fraction, None
+        p_tail, _, used = self._chi2_pvalue(stream[-tail_n:])
+        return best_p, best_fraction, (p_tail if used else None)
 
     def _jpeg_dct_signal(self, img: Image.Image) -> tuple[float, dict]:
         rgb = np.array(img.convert("RGB"), dtype=np.float64)
@@ -128,22 +193,15 @@ class Chi2Detector(BaseDetector):
         if h < JPEG_BLOCK or w < JPEG_BLOCK:
             return 0.0, {"reason": "image too small for 8x8 DCT blocks"}
 
-        coeffs: list[float] = []
-        for row in range(0, h - JPEG_BLOCK + 1, JPEG_BLOCK):
-            for col in range(0, w - JPEG_BLOCK + 1, JPEG_BLOCK):
-                block = channel[row:row + JPEG_BLOCK, col:col + JPEG_BLOCK]
-                block_dct = self._dct2(block)
-                coeffs.append(float(block_dct[JPEG_TARGET_ROW, JPEG_TARGET_COL]))
-
-        values = np.array(coeffs, dtype=np.float64)
+        bh, bw = h // JPEG_BLOCK, w // JPEG_BLOCK
+        blocks = channel[:bh * JPEG_BLOCK, :bw * JPEG_BLOCK].reshape(bh, JPEG_BLOCK, bw, JPEG_BLOCK).swapaxes(1, 2)
+        coeff = scipy_dctn(blocks, axes=(2, 3), norm="ortho")[:, :, JPEG_TARGET_ROW, JPEG_TARGET_COL]
+        values = coeff.reshape(-1).astype(np.float64)  # row-major block order, as embedded
         n_blocks = int(values.size)
         if n_blocks < 64:
             return 0.0, {"reason": "not enough blocks", "blocks": n_blocks}
 
-        if n_blocks >= 1024:
-            front_n = min(max(512, n_blocks // 20), n_blocks // 2)
-        else:
-            front_n = max(16, n_blocks // 4)
+        front_n = min(max(512, n_blocks // 20), n_blocks // 2) if n_blocks >= 1024 else max(16, n_blocks // 4)
 
         abs_vals = np.abs(values)
         front = abs_vals[:front_n]
@@ -174,6 +232,3 @@ class Chi2Detector(BaseDetector):
             "delta_frac_ge18": round(delta_frac, 4),
             "delta_mean_abs": round(delta_mean, 4),
         }
-
-    def _dct2(self, block: np.ndarray) -> np.ndarray:
-        return scipy_dct(scipy_dct(block.T, norm="ortho").T, norm="ortho")

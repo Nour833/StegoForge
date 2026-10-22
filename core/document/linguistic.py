@@ -8,14 +8,20 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import os
 import re
-import struct
-import urllib.request
+import urllib.parse
 
 from core.base import BaseEncoder
+from core.bits import bits_to_bytes, bytes_to_bits, validate_payload_not_empty
+from core.config import env_flag
+from core.http import fetch
 
-HEADER_FMT = ">I"
+log = logging.getLogger(__name__)
+
 HEADER_SIZE = 4
+MAX_PAYLOAD = 10_000_000
 WORD_RE = re.compile(r"\w+|\W+", re.UNICODE)
 
 
@@ -63,26 +69,33 @@ def _build_unique_pair_maps():
 PAIR_BY_TOKEN, BIT_FOR = _build_unique_pair_maps()
 
 
+def _read_text(data: bytes) -> str:
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        raise ValueError("Carrier is not valid UTF-8 text") from None
+
+
 class LinguisticEncoder(BaseEncoder):
     name = "linguistic"
     supported_extensions = [".txt"]
 
     def capacity(self, carrier_bytes: bytes, **kwargs) -> int:
-        text = carrier_bytes.decode("utf-8", errors="replace")
+        text = _read_text(carrier_bytes)
         eligible = self._eligible_positions(text)
         return max(0, (len(eligible) // 8) - HEADER_SIZE)
 
     def encode(self, carrier_bytes: bytes, payload_bytes: bytes, topic: str | None = None, llm_model: str | None = None, **kwargs) -> bytes:
-        cover = carrier_bytes.decode("utf-8", errors="replace")
+        validate_payload_not_empty(payload_bytes)
+        cover = _read_text(carrier_bytes)
         if topic and llm_model:
-            cover = self._generate_cover_with_llm(topic, llm_model, cover)
+            cover = self._generate_cover_with_llm(topic, llm_model)
 
         cap = self.capacity(cover.encode("utf-8"))
         if len(payload_bytes) > cap:
             raise ValueError(f"Payload too large: {len(payload_bytes)} bytes, linguistic capacity: {cap} bytes")
 
-        data = struct.pack(HEADER_FMT, len(payload_bytes)) + payload_bytes
-        bits = _bytes_to_bits(data)
+        bits = bytes_to_bits(len(payload_bytes).to_bytes(HEADER_SIZE, "big") + bytes(payload_bytes))
 
         tokens = WORD_RE.findall(cover)
         ordered_positions = self._ordered_positions(tokens, kwargs.get("key"))
@@ -103,7 +116,7 @@ class LinguisticEncoder(BaseEncoder):
         return "".join(tokens).encode("utf-8")
 
     def decode(self, stego_bytes: bytes, **kwargs) -> bytes:
-        text = stego_bytes.decode("utf-8", errors="replace")
+        text = _read_text(stego_bytes)
         tokens = WORD_RE.findall(text)
         ordered_positions = self._ordered_positions(tokens, kwargs.get("key"))
         bits = []
@@ -115,15 +128,15 @@ class LinguisticEncoder(BaseEncoder):
         if len(bits) < HEADER_SIZE * 8:
             raise ValueError("No linguistic payload header found")
 
-        length = struct.unpack(HEADER_FMT, _bits_to_bytes(bits[:HEADER_SIZE * 8]))[0]
-        if length <= 0 or length > 10_000_000:
+        length = int.from_bytes(bits_to_bytes(bits[:HEADER_SIZE * 8]), "big")
+        if length <= 0 or length > MAX_PAYLOAD:
             raise ValueError(f"Invalid linguistic payload length: {length}")
 
         total_bits = (HEADER_SIZE + length) * 8
         if len(bits) < total_bits:
             raise ValueError("Incomplete linguistic payload")
 
-        return _bits_to_bytes(bits[HEADER_SIZE * 8:total_bits])
+        return bits_to_bytes(bits[HEADER_SIZE * 8:total_bits])
 
     def _eligible_positions(self, text: str) -> list[int]:
         toks = WORD_RE.findall(text)
@@ -137,7 +150,7 @@ class LinguisticEncoder(BaseEncoder):
         # Cost heuristic:
         # - prefer synonym pairs that appear frequently in the cover text
         # - avoid changing title/upper-case words first (usually stylistic)
-        pair_counts = {}
+        pair_counts: dict = {}
         for idx in eligible:
             t = tokens[idx].lower()
             pair = PAIR_BY_TOKEN[t]
@@ -162,37 +175,53 @@ class LinguisticEncoder(BaseEncoder):
         digest = hashlib.sha256(seed + b":" + str(index).encode("ascii")).digest()
         return int.from_bytes(digest[:8], "big")
 
-    def _generate_cover_with_llm(self, topic: str, llm_model: str, fallback_cover: str) -> str:
-        # Optional best-effort hook for OpenAI-compatible local endpoint.
-        endpoint = None
-        model = llm_model
-        if ":" in llm_model and llm_model.startswith("http"):
-            endpoint, model = llm_model.rsplit(":", 1)
-        if not endpoint:
-            return fallback_cover
+    LLM_MAX_BYTES = 256 * 1024
+    LLM_TIMEOUT = 12
 
-        prompt = (
-            "Write a natural paragraph on this topic: "
-            f"{topic}. Include common synonyms and plain language."
-        )
+    def _generate_cover_with_llm(self, topic: str, llm_model: str) -> str:
+        """Ask an OpenAI-compatible endpoint for a cover paragraph.
+
+        ``llm_model`` is ``http(s)://host[:port]/<model>``. The request goes through
+        the SSRF-safe client: private/loopback hosts (the usual home of a local
+        LLM) need ``STEGOFORGE_ALLOW_PRIVATE_LLM=1``. A bearer token from
+        ``STEGOFORGE_LLM_TOKEN`` is only sent over HTTPS or to an allowed private host.
+
+        Raises:
+            ValueError: any failure — a silently substituted cover text would
+                embed the payload somewhere the user did not ask for.
+        """
+        parsed = urllib.parse.urlparse(llm_model)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError("--llm-model must look like http(s)://host[:port]/<model>")
+        allow_private = env_flag("STEGOFORGE_ALLOW_PRIVATE_LLM")
         body = {
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
+            "model": parsed.path.strip("/") or "default",
+            "messages": [{"role": "user", "content": (
+                f"Write a natural paragraph on this topic: {topic[:200]}. Include common synonyms and plain language."
+            )}],
             "temperature": 0.7,
         }
+        headers = {"Content-Type": "application/json"}
+        token = os.getenv("STEGOFORGE_LLM_TOKEN", "")
+        if token and (parsed.scheme == "https" or allow_private):
+            headers["Authorization"] = f"Bearer {token}"
 
+        _, raw = fetch(
+            f"{parsed.scheme}://{parsed.netloc}/v1/chat/completions",
+            data=json.dumps(body).encode("utf-8"),
+            method="POST",
+            headers=headers,
+            timeout=self.LLM_TIMEOUT,
+            max_bytes=self.LLM_MAX_BYTES,
+            allow_private=allow_private,
+        )
         try:
-            req = urllib.request.Request(
-                endpoint.rstrip("/") + "/v1/chat/completions",
-                data=json.dumps(body).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            with urllib.request.urlopen(req, timeout=12) as resp:
-                payload = json.loads(resp.read().decode("utf-8"))
-            return payload["choices"][0]["message"]["content"]
-        except Exception:
-            return fallback_cover
+            text = json.loads(raw.decode("utf-8"))["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError, ValueError):
+            raise ValueError("LLM response was not an OpenAI-style chat completion") from None
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("LLM returned an empty cover text")
+        return text[:4000]
 
 
 def _match_case(original: str, replacement: str) -> str:
@@ -201,21 +230,3 @@ def _match_case(original: str, replacement: str) -> str:
     if original.istitle():
         return replacement.title()
     return replacement
-
-
-def _bytes_to_bits(data: bytes) -> list[int]:
-    bits = []
-    for byte in data:
-        for i in range(7, -1, -1):
-            bits.append((byte >> i) & 1)
-    return bits
-
-
-def _bits_to_bytes(bits: list[int]) -> bytes:
-    out = []
-    for i in range(0, len(bits) - 7, 8):
-        val = 0
-        for b in bits[i:i + 8]:
-            val = (val << 1) | b
-        out.append(val)
-    return bytes(out)
