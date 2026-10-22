@@ -1,7 +1,7 @@
 # Pillow 13 fixes 24 advisories in 12.3.0 but needs Python 3.11; on 3.10 there is no patched release.
 Pillow>=13.0.0; python_version >= "3.11"
 Pillow>=12.3.0; python_version < "3.11"
-numpy>=1.24.0
+numpy>=2.2.6
 scipy>=1.11.0
 cryptography>=48.0.1
 argon2-cffi>=21.3.0
