@@ -1,11 +1,19 @@
 version: 2
 updates:
+  # The version floors in requirements*.txt are the oldest releases StegoForge is tested against (it also
+  # runs on the older libraries Debian and Ubuntu ship), not "the latest". Only raise one when the code needs it.
   - package-ecosystem: pip
     directory: /
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    versioning-strategy: increase-if-necessary
+  # One pull request for all action updates. The release workflows only run on a real release, so merge it
+  # while preparing one and watch that release.
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
+    groups:
+      github-actions:
+        patterns: ["*"]
