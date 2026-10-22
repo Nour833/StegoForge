@@ -1,62 +1,65 @@
 """
-core/crypto/polymorphic.py — Key-seeded encoding parameter variation.
+core/crypto/polymorphic.py — key-seeded embedding order.
 
-Polymorphic encoding derives encoding parameters from the key itself,
-so two embeds of the same payload with different keys use different:
-  - channel_order: e.g. [2, 0, 1] (B, R, G)
-  - bit_position: 0–3 (which LSB layer to use)
-  - row_direction: normal or reversed row traversal
-  - shuffle_seed: seed for Fisher-Yates pixel order shuffle
+A keyed embed visits carrier samples in an order derived from the passphrase,
+so the payload is not stored contiguously from the first pixel. This is
+traversal obfuscation, NOT encryption: confidentiality always comes from
+AES-256-GCM (``core/crypto/aes.py``), and the order is derived with a single
+SHA-256, so it must not be relied upon against an attacker who can try
+passphrases offline.
 
-This defeats signature-based steganalysis: tools looking for a fixed
-pattern of modified bits will not find a consistent signature.
+Two orders exist:
+
+* ``keyed_permutation``  — the order used by every new keyed embed. It uses
+  NumPy's *legacy* ``RandomState`` (MT19937), whose output stream NumPy
+  freezes and guarantees across releases. ``numpy.random.Generator`` makes no
+  such promise, and a stego tool must still be able to read a carrier years
+  later.
+* ``fisher_yates_indices`` — the LCG shuffle of StegoForge <= 1.1.5, kept only
+  so that carriers written by those releases remain readable.
 """
+from __future__ import annotations
+
 import hashlib
 import struct
 
+import numpy as np
+
 
 def derive_encoding_params(key: str) -> dict:
+    """Derive traversal parameters deterministically from a passphrase.
+
+    Returns a dict with ``row_reversed`` and ``shuffle_seed`` (used by the LSB
+    encoder) plus ``channel_order`` / ``bit_position`` (reserved; the shipped
+    encoders do not consume them).
     """
-    Derive encoding parameters deterministically from a password/key.
-
-    Args:
-        key: The user's password string.
-
-    Returns:
-        dict with keys: channel_order, bit_position, row_reversed, shuffle_seed.
-    """
-    digest = hashlib.sha256(key.encode()).digest()
-
-    # Channel order: sort [0,1,2] by bytes in digest → deterministic permutation
-    channel_order = sorted([0, 1, 2], key=lambda i: digest[i])
-
-    # Bit position: which LSB layer (0=LSB, 1=next, etc.)
-    bit_position = digest[3] % 4
-
-    # Row direction
-    row_reversed = (digest[4] % 2 == 0)
-
-    # Shuffle seed: 8-byte integer from digest bytes 5–12
-    shuffle_seed = struct.unpack(">Q", digest[5:13])[0]
-
+    digest = hashlib.sha256(key.encode("utf-8")).digest()
     return {
-        "channel_order": channel_order,
-        "bit_position": bit_position,
-        "row_reversed": row_reversed,
-        "shuffle_seed": shuffle_seed,
+        "channel_order": sorted([0, 1, 2], key=lambda i: digest[i]),
+        "bit_position": digest[3] % 4,
+        "row_reversed": digest[4] % 2 == 0,
+        "shuffle_seed": struct.unpack(">Q", digest[5:13])[0],
     }
 
 
-def fisher_yates_indices(n: int, seed: int) -> list[int]:
-    """
-    Generate a Fisher-Yates shuffled index sequence [0..n-1] using the given seed.
+def keyed_permutation(n: int, seed: int) -> np.ndarray:
+    """Return a deterministic permutation of ``range(n)`` as an int64 array.
 
-    This allows reproducible pixel traversal order that varies by key.
+    Frozen across NumPy versions (legacy ``RandomState`` + ``init_by_array``).
     """
+    if n <= 0:
+        return np.empty(0, dtype=np.int64)
+    seed = int(seed) & 0xFFFFFFFFFFFFFFFF
+    state = np.random.RandomState(np.array([seed & 0xFFFFFFFF, seed >> 32], dtype=np.uint32))
+    return state.permutation(n)
+
+
+def fisher_yates_indices(n: int, seed: int) -> list[int]:
+    """Legacy (<= 1.1.5) LCG Fisher-Yates order. Read-compatibility only."""
+    if n <= 0:
+        return []
     indices = list(range(n))
-    # Simple LCG-based shuffle for determinism (not security-critical here —
-    # security comes from AES encryption, not obscure traversal order)
-    state = seed
+    state = seed & 0xFFFFFFFFFFFFFFFF
     for i in range(n - 1, 0, -1):
         state = (state * 6364136223846793005 + 1442695040888963407) & 0xFFFFFFFFFFFFFFFF
         j = state % (i + 1)

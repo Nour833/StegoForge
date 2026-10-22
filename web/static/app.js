@@ -1,9 +1,78 @@
 /* StegoForge Web UI - Interactive JavaScript */
 'use strict';
 
+const MAX_UPLOAD_BYTES = 200 * 1024 * 1024;
+
+// ── security helpers ─────────────────────────────────────────────────────────
+// Everything that reaches innerHTML and did not come from this file goes through esc():
+// detector output is built from the contents of files the user is *analysing*.
+function esc(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
+
+const TOKEN_KEY = 'stegoforge.token';
+
+function webToken() {
+  try { return sessionStorage.getItem(TOKEN_KEY) || ''; } catch (_) { return ''; }
+}
+
+// `http://localhost:5000/?token=…` hands the UI its token once; keep it for the tab
+// and take it out of the address bar / history.
+(function captureToken() {
+  const url = new URL(window.location.href);
+  const token = url.searchParams.get('token');
+  if (!token) return;
+  try { sessionStorage.setItem(TOKEN_KEY, token); } catch (_) { /* private mode */ }
+  url.searchParams.delete('token');
+  window.history.replaceState(null, '', url.pathname + url.search + url.hash);
+})();
+
+function apiFetch(url, options = {}) {
+  const headers = new Headers(options.headers || {});
+  const token = webToken();
+  if (token) headers.set('X-Stego-Token', token);
+  return fetch(url, { ...options, headers });
+}
+
 let latestCTFReport = null;
 let latestCTFText = '';
 let platformProfiles = {};
+
+// Client-side size guard: refuse an oversize file before anything is uploaded, inline (no alert()).
+function showFileError(input, message) {
+  const info = input.closest('.form-group') && input.closest('.form-group').querySelector('.file-info');
+  if (!info) return;
+  info.textContent = message;
+  info.classList.add('is-error');
+}
+
+document.addEventListener('submit', (e) => {
+  const form = e.target;
+  if (!form || !form.querySelector) return;
+  for (const input of form.querySelectorAll('input[type="file"]')) {
+    for (const f of input.files || []) {
+      if (f.size > MAX_UPLOAD_BYTES) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        showFileError(input, `${f.name} is ${formatBytes(f.size)}; the limit is ${formatBytes(MAX_UPLOAD_BYTES)}.`);
+        input.focus();
+        return;
+      }
+    }
+  }
+}, true);
+
+function artifactHref(payload) {
+  // Opaque artifact IDs (server no longer accepts ?path=).
+  if (payload && payload.artifact_id) {
+    const token = webToken();
+    // A plain download link cannot set headers, so it carries the token in the query.
+    return `/artifact/${encodeURIComponent(payload.artifact_id)}${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+  }
+  return null;
+}
 
 function $(id) {
   return document.getElementById(id);
@@ -15,31 +84,73 @@ function formatBytes(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
-function showLoading(msg = 'Processing...') {
+function ico(name) {
+  return `<svg class="icon" aria-hidden="true"><use href="#i-${name}"/></svg>`;
+}
+
+// Non-blocking progress bar. `pct` (0-100) makes it determinate; without it the bar sweeps.
+function showLoading(msg = 'Working…', pct = null) {
   $('loading-text').textContent = msg;
-  $('loading-overlay').style.display = 'flex';
+  const track = document.querySelector('#loading-overlay .loading-track');
+  if (track) {
+    track.classList.toggle('determinate', typeof pct === 'number');
+    if (typeof pct === 'number') track.style.setProperty('--pct', `${Math.max(2, Math.min(100, pct))}%`);
+  }
+  $('loading-overlay').style.display = 'block';
+  document.body.classList.add('busy');
 }
 
 function hideLoading() {
   $('loading-overlay').style.display = 'none';
+  document.body.classList.remove('busy');
 }
 
-function activateTab(tabId) {
-  document.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('active'));
-  document.querySelectorAll('.tab-panel').forEach((p) => p.classList.remove('active'));
-  const btn = document.querySelector(`.tab-btn[data-tab="${tabId}"]`);
-  const panel = $(`tab-${tabId}`);
-  if (btn) btn.classList.add('active');
-  if (panel) panel.classList.add('active');
-}
+const TAB_IDS = Array.from(document.querySelectorAll('.tab-btn')).map((b) => b.dataset.tab);
 
-// Tab navigation
-(function initTabs() {
-  document.querySelectorAll('.tab-btn').forEach((btn) => {
-    btn.addEventListener('click', () => activateTab(btn.dataset.tab));
+function activateTab(tabId, { focus = false, updateHash = true } = {}) {
+  if (!TAB_IDS.includes(tabId)) tabId = 'encode';
+  document.querySelectorAll('.tab-btn').forEach((b) => {
+    const on = b.dataset.tab === tabId;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-selected', String(on));
+    b.tabIndex = on ? 0 : -1;
   });
-  const initial = document.body.dataset.initialTab || 'encode';
-  activateTab(initial);
+  document.querySelectorAll('.tab-panel').forEach((p) => p.classList.toggle('active', p.id === `tab-${tabId}`));
+  const btn = document.querySelector(`.tab-btn[data-tab="${tabId}"]`);
+  if (btn) {
+    // Bring the active tab into view inside the (horizontally scrolling) nav, without scrolling the page.
+    const nav = btn.parentElement;
+    if (nav && nav.scrollWidth > nav.clientWidth) nav.scrollTo({ left: Math.max(0, btn.offsetLeft - 24) });
+    if (focus) btn.focus({ preventScroll: true });
+  }
+  if (updateHash && window.location.hash !== `#${tabId}`) {
+    window.history.replaceState(null, '', `#${tabId}`);
+  }
+}
+
+// Tab navigation (WAI-ARIA tabs pattern: arrows, Home, End)
+(function initTabs() {
+  const tabs = Array.from(document.querySelectorAll('.tab-btn'));
+  tabs.forEach((btn, i) => {
+    btn.addEventListener('click', () => activateTab(btn.dataset.tab));
+    btn.addEventListener('keydown', (e) => {
+      const step = { ArrowRight: 1, ArrowLeft: -1 }[e.key];
+      let next = null;
+      if (step) next = tabs[(i + step + tabs.length) % tabs.length];
+      else if (e.key === 'Home') next = tabs[0];
+      else if (e.key === 'End') next = tabs[tabs.length - 1];
+      if (next) {
+        e.preventDefault();
+        activateTab(next.dataset.tab, { focus: true });
+      }
+    });
+  });
+  const fromHash = window.location.hash.replace('#', '');
+  activateTab(TAB_IDS.includes(fromHash) ? fromHash : (document.body.dataset.initialTab || 'encode'), { updateHash: false });
+  window.addEventListener('hashchange', () => {
+    const id = window.location.hash.replace('#', '');
+    if (TAB_IDS.includes(id)) activateTab(id, { updateHash: false });
+  });
 })();
 
 function setupDropZone(dropEl, inputEl, infoEl) {
@@ -93,13 +204,22 @@ function updateFileInfo(input, infoEl, dropEl) {
   if (!(input.files && input.files[0])) return;
   const file = input.files[0];
   const sizeStr = formatBytes(file.size);
-  if (infoEl) infoEl.textContent = `✓ ${file.name} (${sizeStr})`;
+  if (infoEl) {
+    infoEl.classList.remove('is-error');
+    infoEl.textContent = '';
+  }
+  if (file.size > MAX_UPLOAD_BYTES) {
+    showFileError(input, `${file.name} is ${sizeStr}; the limit is ${formatBytes(MAX_UPLOAD_BYTES)}.`);
+    input.value = '';
+    if (dropEl) dropEl.classList.remove('has-file');
+    return;
+  }
 
   if (dropEl) {
     dropEl.classList.add('has-file');
     const textEl = dropEl.querySelector('.drop-text');
     if (textEl) {
-      textEl.innerHTML = `<strong style="color:var(--accent-green)">${file.name}</strong><br><small>${sizeStr}</small>`;
+      textEl.innerHTML = `<strong>${esc(file.name)}</strong><br><small>${sizeStr} · click to replace</small>`;
     }
 
     const oldPreview = dropEl.querySelector('.video-preview');
@@ -111,10 +231,6 @@ function updateFileInfo(input, infoEl, dropEl) {
       video.playsInline = true;
       video.preload = 'metadata';
       video.src = URL.createObjectURL(file);
-      video.style.maxWidth = '220px';
-      video.style.marginTop = '8px';
-      video.style.borderRadius = '8px';
-      video.style.border = '1px solid var(--border-subtle)';
       dropEl.appendChild(video);
     }
   }
@@ -140,33 +256,16 @@ function setupPasswordToggle(btnId, inputId) {
   const input = $(inputId);
   if (!btn || !input) return;
   btn.addEventListener('click', () => {
-    if (input.type === 'password') {
-      input.type = 'text';
-      btn.textContent = '🙈';
-    } else {
-      input.type = 'password';
-      btn.textContent = '👁';
-    }
+    const show = input.type === 'password';
+    input.type = show ? 'text' : 'password';
+    btn.innerHTML = ico(show ? 'eye-off' : 'eye');
+    btn.setAttribute('aria-pressed', String(show));
+    btn.setAttribute('aria-label', show ? 'Hide passphrase' : 'Show passphrase');
   });
 }
 
 setupPasswordToggle('enc-key-toggle', 'enc-key');
 setupPasswordToggle('dec-key-toggle', 'dec-key');
-
-function toggleCollapse(btnId, contentId) {
-  const btn = $(btnId);
-  const content = $(contentId);
-  if (!btn || !content) return;
-  const arrow = btn.querySelector('.collapse-arrow');
-  btn.addEventListener('click', () => {
-    const isOpen = content.style.display !== 'none';
-    content.style.display = isOpen ? 'none' : 'flex';
-    if (arrow) arrow.textContent = isOpen ? '▶' : '▼';
-  });
-}
-
-toggleCollapse('decoy-toggle', 'decoy-content');
-toggleCollapse('platform-toggle', 'platform-content');
 
 // Method pill selector
 (function initMethodPills() {
@@ -176,7 +275,7 @@ toggleCollapse('platform-toggle', 'platform-content');
   const renderDescription = (pill) => {
     const rating = pill.dataset.rating || '';
     const text = pill.dataset.desc || '';
-    desc.textContent = `${text}${rating ? ` Forensic resistance: ${rating}.` : ''}`;
+    desc.textContent = `${text}${rating ? ` Relative stealth: ${rating}.` : ''}`;
   };
 
   pills.forEach((pill) => {
@@ -204,10 +303,10 @@ toggleCollapse('platform-toggle', 'platform-content');
   const capDepthDisplay = $('cap-depth-display');
 
   const depthDescriptions = {
-    1: 'At depth 1: stealth-first profile.',
-    2: 'At depth 2: balanced capacity and stealth.',
-    3: 'At depth 3: higher capacity with more detectable artifacts.',
-    4: 'At depth 4: maximum capacity and visible distortion risk.',
+    1: 'Depth 1: stealth-first.',
+    2: 'Depth 2: balances capacity and stealth.',
+    3: 'Depth 3: more capacity, more detectable changes.',
+    4: 'Depth 4: maximum capacity, with a risk of visible distortion.',
   };
 
   if (depthSlider) {
@@ -235,7 +334,7 @@ async function refreshCapacityTabLiveMatrix() {
   if (!carrier || !box) return;
   if (!(carrier.files && carrier.files[0])) {
     box.className = 'capacity-matrix empty';
-    box.textContent = 'Drop a carrier to compute capacities across methods.';
+    box.textContent = 'Choose a carrier to compare methods.';
     return;
   }
 
@@ -245,7 +344,7 @@ async function refreshCapacityTabLiveMatrix() {
   fd.append('depth', depth ? depth.value : '1');
 
   try {
-    const resp = await fetch('/api/capacity-matrix', { method: 'POST', body: fd });
+    const resp = await apiFetch('/api/capacity-matrix', { method: 'POST', body: fd });
     const data = await resp.json();
     if (data.error) {
       box.className = 'capacity-matrix';
@@ -262,20 +361,20 @@ async function refreshCapacityTabLiveMatrix() {
       if (pct >= 90) bar = 'danger';
       else if (pct >= 65) bar = 'warn';
       return `<div class="capacity-row">
-        <div>${r.method}</div>
+        <div>${esc(r.method)}</div>
         <div>${Number(r.capacity_kb || 0).toFixed(2)} KB${util > 0 ? ` (${util.toFixed(1)}%)` : ''}</div>
         <div class="capacity-bar-wrap"><div class="capacity-bar ${bar}" style="width:${pct}%"></div></div>
       </div>`;
     }).join('');
   } catch (e) {
     box.className = 'capacity-matrix';
-    box.textContent = `Live matrix error: ${e.message}`;
+    box.textContent = `Could not compute capacities: ${e.message}`;
   }
 }
 
 async function initPlatformProfiles() {
   try {
-    const res = await fetch('/api/platform-profiles');
+    const res = await apiFetch('/api/platform-profiles');
     const data = await res.json();
     platformProfiles = data.profiles || {};
   } catch (_) {
@@ -290,7 +389,7 @@ async function initPlatformProfiles() {
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'platform-pill';
-    b.textContent = name.toUpperCase();
+    b.textContent = name;
     b.dataset.platform = name;
     b.addEventListener('click', () => selectPlatform(name));
     wrap.appendChild(b);
@@ -322,7 +421,7 @@ function selectPlatform(name) {
   });
   $('enc-method').value = method;
   if (chosen) {
-    $('method-desc').textContent = `${chosen.dataset.desc || ''} Forensic resistance: ${chosen.dataset.rating || 'Balanced'}.`;
+    $('method-desc').textContent = `${chosen.dataset.desc || ''} Relative stealth: ${chosen.dataset.rating || 'Balanced'}.`;
   }
 }
 
@@ -341,7 +440,7 @@ async function refreshCapacityMatrix() {
   if (!carrier || !box) return;
   if (!(carrier.files && carrier.files[0])) {
     box.className = 'capacity-matrix empty';
-    box.textContent = 'Drop carrier and payload to compute per-method usage.';
+    box.textContent = 'Choose a carrier to see how much each method can hold.';
     return;
   }
 
@@ -353,7 +452,7 @@ async function refreshCapacityMatrix() {
   formData.append('depth', depth ? depth.value : '1');
 
   try {
-    const resp = await fetch('/api/capacity-matrix', { method: 'POST', body: formData });
+    const resp = await apiFetch('/api/capacity-matrix', { method: 'POST', body: formData });
     const data = await resp.json();
     if (data.error) {
       box.className = 'capacity-matrix';
@@ -377,7 +476,7 @@ async function refreshCapacityMatrix() {
         if (pct >= 90) barClass = 'danger';
         else if (pct >= 65) barClass = 'warn';
         return `<div class="capacity-row">
-          <div>${r.method}</div>
+          <div>${esc(r.method)}</div>
           <div>${Number(r.capacity_kb || 0).toFixed(2)} KB</div>
           <div class="capacity-bar-wrap">
             <div class="capacity-bar ${barClass}" style="width:${pct}%"></div>
@@ -387,7 +486,7 @@ async function refreshCapacityMatrix() {
       .join('');
   } catch (e) {
     box.className = 'capacity-matrix';
-    box.textContent = `Capacity matrix error: ${e.message}`;
+    box.textContent = `Could not compute capacities: ${e.message}`;
   }
 }
 
@@ -396,60 +495,77 @@ async function refreshCapacityMatrix() {
   if (el) el.addEventListener('change', refreshCapacityTabLiveMatrix);
 });
 
-function renderSuccess(msg) {
+// renderSuccess takes *trusted markup*: escape any dynamic part at the call site.
+function renderSuccess(msg, title = 'Done') {
   return `<div class="result-card success">
-    <div class="result-title success-title">✓ Success</div>
-    <p style="font-size:.9rem;color:var(--text-secondary)">${msg}</p>
+    <div class="result-title success-title">${ico('check')} ${esc(title)}</div>
+    <p>${msg}</p>
   </div>`;
 }
 
 function renderError(msg) {
   return `<div class="result-card error">
-    <div class="result-title error-title">✗ Error</div>
-    <p style="font-size:.9rem;color:var(--accent-red)">${msg}</p>
+    <div class="result-title error-title">${ico('alert')} Something went wrong</div>
+    <p>${esc(msg)}</p>
   </div>`;
+}
+
+function renderGrid(rows) {
+  const cells = rows
+    .filter(([, value]) => value !== undefined && value !== null && value !== '')
+    .map(([key, value]) => `<div class="result-key">${esc(key)}</div><div class="result-val">${value}</div>`)
+    .join('');
+  return `<div class="result-grid">${cells}</div>`;
+}
+
+function renderNote(kind, title, body) {
+  const icon = { ok: 'check', warn: 'alert', info: 'info' }[kind] || 'info';
+  return `<div class="note ${kind}">${ico(icon)}<div>${title ? `<strong>${esc(title)}</strong>` : ''}${body}</div></div>`;
 }
 
 function renderConfidenceBar(confidence) {
   const pct = Math.round(Number(confidence || 0) * 100);
   const colorClass = pct > 70 ? 'red' : pct > 30 ? 'yellow' : 'green';
   return `<div class="confidence-bar-wrap">
-    <div class="confidence-bar-bg">
-      <div class="confidence-bar-fill ${colorClass}" style="width:${pct}%"></div>
-    </div>
+    <div class="confidence-bar-bg"><div class="confidence-bar-fill ${colorClass}" style="width:${pct}%"></div></div>
     <div class="confidence-label">${pct}% confidence</div>
   </div>`;
 }
 
-function renderDetectorResult(r, idx = 0) {
-  const detected = !!r.detected;
-  const details = r.details || {};
-  const isSkipped = details.skipped === true;
+const DETECTOR_NAMES = {
+  chi2: 'Chi-square', rs: 'RS analysis', exif: 'Metadata', blind: 'Blind extractor', ml: 'ML',
+  fingerprint: 'Camera fingerprint', binary: 'Binary', 'video-anomaly': 'Video', 'audio-anomaly': 'Audio',
+  'pdf-anomaly': 'PDF', 'document-anomaly': 'Document',
+};
 
-  const statusIcon = isSkipped ? '⏭' : (detected ? '🔴' : '🟢');
-  const statusLabel = isSkipped
-    ? '<span style="color:var(--text-muted)">SKIPPED</span>'
-    : (detected ? '<span style="color:var(--accent-red)">DETECTED</span>' : '<span style="color:var(--accent-green)">CLEAN</span>');
+function renderDetectorResult(r, idx = 0) {
+  const details = r.details || {};
+  const skipped = details.skipped === true;
+  const detected = !!r.detected;
+  // A detector that says it cannot tell must not wear the green "clean" chip.
+  const inconclusive = !skipped && !detected && (details.reliable === false || details.inconclusive === true);
+  let chip;
+  let tone = '';
+  if (skipped) chip = '<span class="status-chip skipped">SKIPPED</span>';
+  else if (detected) { chip = '<span class="status-chip detected">DETECTED</span>'; tone = 'detected'; }
+  else if (inconclusive) chip = '<span class="status-chip inconclusive">INCONCLUSIVE</span>';
+  else { chip = '<span class="status-chip clean">CLEAN</span>'; tone = 'clean'; }
 
   let extra = '';
   if (details.interpretation) {
-    extra += `<div class="result-grid"><div class="result-key">Analysis</div><div class="result-val">${details.interpretation}</div></div>`;
+    extra += renderGrid([['Analysis', esc(details.interpretation)]]);
   }
-
-  if (r.method === 'fingerprint' && (details.heatmap_b64 || details.heatmap)) {
-    const src = details.heatmap_b64
-      ? `data:image/png;base64,${details.heatmap_b64}`
-      : `/artifact?path=${encodeURIComponent(details.heatmap)}`;
-    extra += `<div style="margin-top:10px"><img src="${src}" alt="Fingerprint heatmap" style="max-width:100%;border-radius:8px;border:1px solid var(--border-subtle)"><div style="font-size:.78rem;color:var(--text-muted);margin-top:6px">Brighter regions indicate anomalous residual noise statistics consistent with pixel modification.</div></div>`;
+  if (r.method === 'fingerprint' && details.heatmap_b64) {
+    const src = `data:image/png;base64,${String(details.heatmap_b64).replace(/[^A-Za-z0-9+/=]/g, '')}`;
+    extra += `<div style="margin-top:12px"><img class="result-image" src="${src}" alt="Fingerprint heatmap: brighter regions have noise statistics inconsistent with an untouched photograph"></div>`;
   }
-
   if (r.method === 'ml') {
-    extra += `<div class="result-grid"><div class="result-key">Verdict</div><div class="result-val">${details.verdict || 'N/A'}</div><div class="result-key">Hints</div><div class="result-val">${(details.hints || []).join('; ') || 'None'}</div></div>`;
+    extra += renderGrid([['Verdict', esc(details.verdict || 'N/A')], ['Hints', esc((details.hints || []).join('; ') || 'None')]]);
   }
 
-  return `<div class="result-card" style="margin-bottom:12px; animation: fadeIn 0.4s cubic-bezier(0.2,0.8,0.2,1) forwards; animation-delay: ${idx * 0.12}s; opacity: 0">
-    <div class="result-title accent-title">${statusIcon} ${String(r.method || '').toUpperCase()} ${statusLabel}</div>
-    ${renderConfidenceBar(r.confidence)}
+  return `<div class="result-card ${tone}" style="animation:rise .3s both;animation-delay:${Math.min(idx, 8) * 50}ms">
+    <div class="result-title accent-title">${esc(DETECTOR_NAMES[r.method] || String(r.method || '').toUpperCase())} ${chip}</div>
+    ${skipped || inconclusive ? '' : renderConfidenceBar(r.confidence)}
     ${extra}
   </div>`;
 }
@@ -506,31 +622,43 @@ function b64toBlob(b64Data, contentType = 'application/octet-stream') {
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     result.style.display = 'none';
-    showLoading('Streaming encode pipeline...');
+    showLoading('Validating request…');
 
     const formData = new FormData(form);
     try {
-      const response = await fetch('/api/encode-stream', { method: 'POST', body: formData });
-      const logs = [];
+      const response = await apiFetch('/api/encode-stream', { method: 'POST', body: formData });
       let finalPayload = null;
       await consumeSSE(response, (msg) => {
-        if (msg.type === 'info') logs.push(msg.text);
+        if (msg.type === 'info' || msg.type === 'progress') {
+          showLoading(msg.text || 'Embedding…', typeof msg.pct === 'number' ? msg.pct : null);
+        }
         if (msg.type === 'success') finalPayload = msg;
         if (msg.type === 'error') throw new Error(msg.text);
       });
 
-      if (!finalPayload) {
-        throw new Error('Encode stream failed');
-      }
+      const href = finalPayload && artifactHref(finalPayload);
+      if (!href) throw new Error('The encode did not produce a file.');
 
-      const artifact = finalPayload.artifact;
       const dlName = finalPayload.download_name || 'stego.bin';
-      const href = `/artifact?path=${encodeURIComponent(artifact)}`;
-      result.innerHTML = `${renderSuccess('Encode completed successfully.')}
-        <div class="result-card"><div class="result-title accent-title">Live Log</div><pre class="code-block">${logs.join('\n')}</pre></div>
-        <div class="result-card">
-          <div class="result-title accent-title">Output Artifact</div>
-          <a class="btn btn-primary" href="${href}" download="${dlName}">Download ${dlName}</a>
+      const r = finalPayload.result || {};
+      const warnings = (r.warnings || []).map((w) => renderNote('warn', '', esc(w))).join('');
+      const survival = r.survival_test
+        ? `${r.survival_test.survived ? 'Survived' : 'Did not survive'} ${esc(r.survival_test.target || '')}${r.survival_test.error ? ` (${esc(r.survival_test.error)})` : ''}`
+        : '';
+      result.innerHTML = `<div class="result-card success">
+          <div class="result-title success-title">${ico('check')} Payload embedded</div>
+          ${renderGrid([
+            ['Method', esc(r.method)],
+            ['Size', `${formatBytes(Number(r.payload_size || 0))} → ${formatBytes(Number(r.encrypted_size || 0))} after encryption`],
+            ['Capacity', formatBytes(Number(r.capacity || 0))],
+            ['Bit depth', r.depth ? esc(r.depth) : ''],
+            ['Survival test', survival],
+            ['Decoy', r.decoy_mode ? 'second payload embedded' : ''],
+          ])}
+        </div>
+        ${warnings}
+        <div class="form-actions">
+          <a class="btn btn-primary" href="${esc(href)}" download="${esc(dlName)}">${ico('download')} Download ${esc(dlName)}</a>
         </div>`;
       result.style.display = 'block';
     } catch (err) {
@@ -548,14 +676,14 @@ function b64toBlob(b64Data, contentType = 'application/octet-stream') {
   const result = $('decode-result');
   if (!form) return;
 
-    form.addEventListener('submit', async (e) => {
+  form.addEventListener('submit', async (e) => {
     e.preventDefault();
     result.style.display = 'none';
-    showLoading('Decoding payload...');
+    showLoading('Extracting…');
 
     try {
       const formData = new FormData(form);
-      const response = await fetch('/decode', { method: 'POST', body: formData });
+      const response = await apiFetch('/decode', { method: 'POST', body: formData });
       if (!response.ok) {
         const data = await response.json();
         throw new Error(data.error || 'Decode failed');
@@ -563,35 +691,34 @@ function b64toBlob(b64Data, contentType = 'application/octet-stream') {
 
       const blob = await response.blob();
       const disposition = response.headers.get('content-disposition') || '';
-      const match = disposition.match(/filename="?([^\"]+)"?/);
+      const match = disposition.match(/filename="?([^"]+)"?/);
       const filename = match ? match[1] : 'decoded_payload.bin';
       const contentType = response.headers.get('content-type') || 'application/octet-stream';
       const sfrgHint = response.headers.get('x-stegoforge-hint') || '';
-
       const url = URL.createObjectURL(blob);
 
-      result.innerHTML = `${renderSuccess(`Decoded payload: <strong>${filename}</strong>${sfrgHint ? ' <span style="color:var(--accent-yellow)">(encrypted blob detected)</span>' : ''} `)}`;
+      let html = `<div class="result-card success">
+        <div class="result-title success-title">${ico('check')} Payload extracted</div>
+        ${renderGrid([['File', esc(filename)], ['Size', formatBytes(blob.size)], ['Type', esc(contentType)]])}
+      </div>`;
 
-      // Inline preview based on MIME
+      // Inline preview based on MIME type
       if (contentType.startsWith('image/')) {
-        result.innerHTML += `<div class="result-card"><div class="result-title accent-title">Image Preview</div><img src="${url}" alt="Decoded image" style="max-width:100%;border-radius:8px;border:1px solid var(--border-subtle)"></div>`;
+        html += `<div class="result-card"><div class="result-title accent-title">Preview</div><img class="result-image" src="${url}" alt="Decoded image"></div>`;
       } else if (contentType.startsWith('audio/')) {
-        result.innerHTML += `<div class="result-card"><div class="result-title accent-title">Audio Preview</div><audio controls src="${url}" style="width:100%"></audio></div>`;
-      } else if (contentType === 'text/plain' && blob.size <= 32768) {
-        const textCandidate = await blob.text();
-        result.innerHTML += `<div class="result-card"><div class="result-title accent-title">Inline Preview</div><textarea class="form-input" rows="10" readonly>${textCandidate.replace(/</g, '&lt;')}</textarea></div>`;
+        html += `<div class="result-card"><div class="result-title accent-title">Preview</div><audio class="result-audio" controls src="${url}"></audio></div>`;
       } else if (blob.size <= 32768) {
-        // fallback: try text
-        const textCandidate = await blob.text();
-        const isText = /^(?:[\x09\x0A\x0D\x20-\x7E]|[\u00A0-\uFFFF])*$/u.test(textCandidate);
-        if (isText) result.innerHTML += `<div class="result-card"><div class="result-title accent-title">Inline Preview</div><textarea class="form-input" rows="10" readonly>${textCandidate.replace(/</g, '&lt;')}</textarea></div>`;
+        const text = await blob.text();
+        const isText = contentType === 'text/plain' || /^(?:[\x09\x0A\x0D\x20-\x7E]|[ -￿])*$/u.test(text);
+        if (isText) {
+          html += `<div class="result-card"><div class="result-title accent-title">Preview</div><textarea class="form-input result-text" rows="10" readonly>${esc(text)}</textarea></div>`;
+        }
       }
-
       if (sfrgHint) {
-        result.innerHTML += `<div class="result-card" style="border-color:rgba(255,215,64,0.4);background:rgba(255,215,64,0.05)"><div class="result-title warn-title">ℹ Encrypted Payload Detected</div><p style="font-size:.88rem;color:var(--text-secondary)">${sfrgHint}</p></div>`;
+        html += renderNote('warn', 'This payload is another encrypted blob', esc(sfrgHint));
       }
-
-      result.innerHTML += `<div class="result-card"><a class="btn btn-primary" href="${url}" download="${filename}">⬇ Download ${filename}</a></div>`;
+      html += `<div class="form-actions"><a class="btn btn-primary" href="${url}" download="${esc(filename)}">${ico('download')} Download ${esc(filename)}</a></div>`;
+      result.innerHTML = html;
       result.style.display = 'block';
     } catch (err) {
       result.innerHTML = renderError(err.message);
@@ -611,25 +738,22 @@ function b64toBlob(b64Data, contentType = 'application/octet-stream') {
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     result.style.display = 'none';
-    showLoading('Streaming detector pipeline...');
+    showLoading('Running detectors…');
 
     try {
       const formData = new FormData(form);
-      const response = await fetch('/api/detect-stream', { method: 'POST', body: formData });
+      const response = await apiFetch('/api/detect-stream', { method: 'POST', body: formData });
       let finalReport = null;
-      const logs = [];
 
       await consumeSSE(response, (msg) => {
-        if (msg.type === 'log') logs.push(msg.text);
-        if (msg.type === 'info') logs.push(msg.text);
+        if (msg.type === 'log' || msg.type === 'info') showLoading(msg.text);
         if (msg.type === 'success') finalReport = msg.report;
         if (msg.type === 'error') throw new Error(msg.text);
       });
 
-      if (!finalReport) throw new Error('Detection stream did not produce a final report');
+      if (!finalReport) throw new Error('The detectors did not produce a report.');
 
-      let html = `<div class="result-card"><div class="result-title accent-title">Detector Stream</div><pre class="code-block">${logs.join('\n')}</pre></div>`;
-      html += `<h3 style="font-size:1rem;color:var(--accent-cyan);margin-bottom:16px">Results for: <em>${finalReport.file}</em></h3>`;
+      let html = `<p class="panel-subtitle" style="margin-bottom:16px">Results for <strong>${esc(finalReport.file)}</strong></p>`;
       (finalReport.results || []).forEach((r, idx) => {
         html += renderDetectorResult(r, idx);
       });
@@ -652,16 +776,28 @@ function b64toBlob(b64Data, contentType = 'application/octet-stream') {
   const exportBtn = $('ctf-export-json');
   if (!form) return;
 
+  const noteFor = (n) => {
+    const text = String(n);
+    if (text.includes('SFRG magic') || text.includes('AES-256-GCM')) {
+      return renderNote('warn', 'Encrypted StegoForge payload extracted',
+        `<p>The data was extracted from the carrier, but it is an encrypted <code>.sfrg</code> blob.</p>
+         <ol><li>Download the extracted file below.</li><li>Open the <strong>Decode</strong> tab and choose it as the stego file.</li><li>Enter the passphrase.</li></ol>`);
+    }
+    if (text.includes('✔')) return renderNote('ok', 'Payload extracted without a key', `<p>${esc(text.replace('✔ ', ''))}</p>`);
+    if (text.includes('ℹ')) return renderNote('info', '', `<p>${esc(text.replace('ℹ ', ''))}</p>`);
+    return renderNote('info', '', `<p>${esc(text.replace(/^⚠\s*/, ''))}</p>`);
+  };
+
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     result.style.display = 'none';
-    showLoading('Running full forensic analysis...');
+    showLoading('Running every detector…');
     latestCTFReport = null;
     latestCTFText = '';
 
     try {
       const formData = new FormData(form);
-      const response = await fetch('/ctf', { method: 'POST', body: formData });
+      const response = await apiFetch('/ctf', { method: 'POST', body: formData });
       const data = await response.json();
       if (data.error) throw new Error(data.error);
 
@@ -669,9 +805,9 @@ function b64toBlob(b64Data, contentType = 'application/octet-stream') {
 
       const detected = data.verdict === 'STEGO DETECTED';
       const pct = Math.round(Number(data.confidence || 0) * 100);
-      let html = `<div class="ctf-verdict ${detected ? 'detected-bg' : 'clean-bg'}">
-        <div class="ctf-verdict-label ${detected ? 'detected' : 'clean'}">${data.verdict}</div>
-        <div class="ctf-verdict-pct">Overall confidence: ${pct}%</div>
+      let html = `<div class="ctf-verdict">
+        <div class="ctf-verdict-label ${detected ? 'detected' : 'clean'}">${esc(data.verdict)}</div>
+        <div class="ctf-verdict-pct">Strongest detector signal ${pct}%</div>
       </div>`;
 
       (data.results || []).forEach((r, idx) => {
@@ -679,87 +815,34 @@ function b64toBlob(b64Data, contentType = 'application/octet-stream') {
       });
 
       if (data.notes && data.notes.length) {
-        const notesHtml = data.notes.map(n => {
-          if (n.includes("SFRG magic") || n.includes("AES-256-GCM")) {
-            return `
-              <div class="result-card" style="background: rgba(234, 179, 8, 0.05); border: 1px solid rgba(234, 179, 8, 0.2); margin-bottom: 16px; border-left: 4px solid var(--accent-highlight);">
-                <div style="display: flex; align-items: flex-start; gap: 14px;">
-                  <div style="font-size: 1.8rem; filter: sepia(1) hue-rotate(-20deg) saturate(3);">🔒</div>
-                  <div>
-                    <h4 style="margin: 0 0 6px 0; color: var(--accent-highlight); font-size: 1.05rem;">Encrypted Payload Extracted</h4>
-                    <p style="margin: 0 0 8px 0; font-size: 0.9rem; color: var(--text-muted); line-height: 1.4;">
-                      The data was successfully ripped from the carrier, but it is an encrypted StegoForge object (<b>.sfrg</b> file).
-                    </p>
-                    <div style="background: rgba(0,0,0,0.2); padding: 10px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); font-size: 0.85rem; color: var(--text-muted);">
-                      <strong style="color: #fff;">How to decrypt it:</strong><br/>
-                      1. Download the <code>.sfrg</code> file below.<br/>
-                      2. Go to the <b>Decode</b> tab.<br/>
-                      3. Upload the <code>.sfrg</code> file as your Challenge File and enter the correct password!
-                    </div>
-                  </div>
-                </div>
-              </div>
-            `;
-          } else if (n.includes("✔")) {
-             return `
-              <div class="result-card success" style="margin-bottom: 16px;">
-                <div style="display: flex; align-items: flex-start; gap: 14px;">
-                  <div style="font-size: 1.8rem;">🔓</div>
-                  <div>
-                    <h4 style="margin: 0 0 6px 0; color: var(--accent-success); font-size: 1.05rem;">Keyless Payload Extracted</h4>
-                    <p style="margin: 0; font-size: 0.9rem; color: var(--text-muted); line-height: 1.4;">
-                      ${n.replace('✔ ', '')}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            `;
-          } else if (n.includes("ℹ")) {
-             return `
-              <div class="result-card" style="background: var(--bg-secondary); border: 1px solid var(--border-subtle); margin-bottom: 16px;">
-                <div style="display: flex; align-items: flex-start; gap: 14px;">
-                  <div style="font-size: 1.8rem;">💡</div>
-                  <div>
-                    <h4 style="margin: 0 0 6px 0; color: var(--text-normal); font-size: 1.05rem;">Analysis Insight</h4>
-                    <p style="margin: 0; font-size: 0.9rem; color: var(--text-muted); line-height: 1.4;">
-                      ${n.replace('ℹ ', '')}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            `;
-          } else {
-             return `<div class="result-card" style="margin-bottom:16px; padding:12px; background:var(--bg-modifier-hover); border-radius:6px; font-size:0.9rem;">${n}</div>`;
-          }
-        }).join('');
-        
-        html += `<div style="margin-top: 20px;">${notesHtml}</div>`;
+        html += `<div style="margin-top:20px">${data.notes.map(noteFor).join('')}</div>`;
       }
 
       if (data.has_extracted_payload && data.extracted_payload_b64) {
         const extractedMime = data.extracted_payload_mime || 'application/octet-stream';
-        const extractedExt  = data.extracted_payload_ext  || '.bin';
+        const extractedExt = data.extracted_payload_ext || '.bin';
         const blob = b64toBlob(data.extracted_payload_b64, extractedMime);
         const url = URL.createObjectURL(blob);
         const dlName = `extracted_payload${extractedExt}`;
-        let previewHtml = '';
+        let preview = '';
         if (extractedMime.startsWith('image/')) {
-          previewHtml = `<div style="margin-top:12px"><img src="${url}" alt="Extracted image payload" style="max-width:100%;border-radius:8px;border:1px solid var(--border-subtle)"></div>`;
-        } else if (extractedMime === 'text/plain' && blob.size <= 32768) {
-          const textContent = await blob.text();
-          previewHtml = `<div style="margin-top:12px"><textarea class="form-input" rows="8" readonly>${textContent.replace(/</g, '&lt;')}</textarea></div>`;
+          preview = `<img class="result-image" src="${url}" alt="Extracted image payload">`;
         } else if (extractedMime.startsWith('audio/')) {
-          previewHtml = `<div style="margin-top:12px"><audio controls src="${url}" style="width:100%"></audio></div>`;
+          preview = `<audio class="result-audio" controls src="${url}"></audio>`;
         } else if (blob.size <= 32768) {
-          const textContent = await blob.text();
-          if (/^(?:[\x09\x0A\x0D\x20-\x7E]|[\u00A0-\uFFFF])*$/u.test(textContent)) {
-             previewHtml = `<div style="margin-top:12px"><textarea class="form-input" rows="8" readonly>${textContent.replace(/</g, '&lt;')}</textarea></div>`;
+          const text = await blob.text();
+          if (extractedMime === 'text/plain' || /^(?:[\x09\x0A\x0D\x20-\x7E]|[ -￿])*$/u.test(text)) {
+            preview = `<textarea class="form-input result-text" rows="8" readonly>${esc(text)}</textarea>`;
           }
         }
-        html += `<div class="result-card success"><div class="result-title success-title">Extracted payload ready — <code>${dlName}</code></div>${previewHtml}<a class="btn btn-primary" style="margin-top:12px" href="${url}" download="${dlName}">⬇ Download ${dlName}</a></div>`;
+        html += `<div class="result-card success">
+          <div class="result-title success-title">${ico('check')} Extracted payload · <code>${esc(dlName)}</code></div>
+          ${preview}
+          <div class="form-actions"><a class="btn btn-primary" href="${url}" download="${esc(dlName)}">${ico('download')} Download ${esc(dlName)}</a></div>
+        </div>`;
       }
 
-      latestCTFText = `Verdict: ${data.verdict}\nConfidence: ${pct}%\n`;
+      latestCTFText = `Verdict: ${data.verdict}\nStrongest detector signal: ${pct}%\n`;
       (data.results || []).forEach((r) => {
         latestCTFText += `${r.method}: ${r.detected ? 'DETECTED' : 'CLEAN'} (${Math.round(Number(r.confidence || 0) * 100)}%)\n`;
       });
@@ -777,11 +860,13 @@ function b64toBlob(b64Data, contentType = 'application/octet-stream') {
   if (copyBtn) {
     copyBtn.addEventListener('click', async () => {
       if (!latestCTFText) return;
-      await navigator.clipboard.writeText(latestCTFText);
-      copyBtn.textContent = 'Copied';
-      setTimeout(() => {
-        copyBtn.textContent = 'Copy Report';
-      }, 1200);
+      try {
+        await navigator.clipboard.writeText(latestCTFText);
+        copyBtn.textContent = 'Copied';
+      } catch (_) {
+        copyBtn.textContent = 'Copy failed';
+      }
+      setTimeout(() => { copyBtn.textContent = 'Copy report'; }, 1400);
     });
   }
 
@@ -808,57 +893,35 @@ function b64toBlob(b64Data, contentType = 'application/octet-stream') {
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     result.style.display = 'none';
-    showLoading('Calculating capacity...');
+    showLoading('Calculating capacity…');
 
     try {
       const formData = new FormData(form);
-      const response = await fetch('/capacity', { method: 'POST', body: formData });
+      const response = await apiFetch('/capacity', { method: 'POST', body: formData });
       const data = await response.json();
       if (data.error) throw new Error(data.error);
 
-      let extra = '';
+      const rows = [
+        ['File', esc(data.file)],
+        ['Method', `<span class="result-val cyan">${esc(data.method)}</span>`],
+        ['Bit depth', `${esc(data.depth)}`],
+        ['Capacity', `<span class="result-val green">${Number(data.capacity_bytes || 0).toLocaleString()} bytes</span> (${Number(data.capacity_kb || 0).toFixed(2)} KB)`],
+      ];
+      if (data.stealth_score !== undefined) {
+        rows.push(['Stealth score', `${Number(data.stealth_score)}/100`]);
+      }
       if (data.jnd_safe_dct_capacity) {
         const j = data.jnd_safe_dct_capacity;
-        extra += `<div class="result-key">JND-safe DCT</div><div class="result-val">${j.bytes.toLocaleString()} bytes (${j.kb} KB)</div>`;
+        rows.push(['Perceptually safe (DCT)', `${Number(j.bytes).toLocaleString()} bytes (${Number(j.kb)} KB)`]);
       }
       if (data.video_context) {
         const v = data.video_context;
-        extra += `<div class="result-key">Video context</div><div class="result-val">${v.duration_seconds}s, ${v.frames} frames, ${v.keyframes} keyframes</div>`;
+        rows.push(['Video', `${Number(v.duration_seconds)}s, ${Number(v.frames)} frames, ${Number(v.usable_frames ?? v.keyframes)} usable`]);
+        if (v.capacity_note) rows.push(['Note', esc(v.capacity_note)]);
       }
-
-      let stealthHtml = '';
-      if (data.stealth_score !== undefined) {
-        const score = data.stealth_score;
-        let label, color;
-        if (score >= 75) { label = 'High'; color = 'var(--accent-green)'; }
-        else if (score >= 50) { label = 'Fair'; color = 'var(--accent-yellow)'; }
-        else if (score >= 25) { label = 'Low'; color = 'var(--accent-red)'; }
-        else { label = 'Very Low'; color = 'var(--accent-red)'; }
-        
-        stealthHtml = `
-          <div class="result-key">Stealth</div>
-          <div class="result-val">
-            <div style="display:flex;align-items:center;gap:8px;margin-top:2px">
-              <div style="flex:1;height:4px;background:var(--bg-elevated);border-radius:2px;overflow:hidden">
-                <div style="width:${score}%;height:100%;background:${color};border-radius:2px"></div>
-              </div>
-              <span style="font-size:.8rem;color:${color}">${label} (${score}/100)</span>
-            </div>
-          </div>
-        `;
-      }
-
       result.innerHTML = `<div class="result-card success">
-        <div class="result-title success-title">Capacity Result</div>
-        <div class="result-grid">
-          <div class="result-key">File</div><div class="result-val">${data.file}</div>
-          <div class="result-key">Method</div><div class="result-val cyan">${data.method}</div>
-          <div class="result-key">Depth</div><div class="result-val">${data.depth} bit(s)</div>
-          ${stealthHtml}
-          <div class="result-key">Capacity</div><div class="result-val green">${Number(data.capacity_bytes || 0).toLocaleString()} bytes</div>
-          <div class="result-key"></div><div class="result-val">${Number(data.capacity_kb || 0).toFixed(2)} KB / ${Number(data.capacity_mb || 0).toFixed(4)} MB</div>
-          ${extra}
-        </div>
+        <div class="result-title success-title">${ico('ruler')} Capacity</div>
+        ${renderGrid(rows)}
       </div>`;
       result.style.display = 'block';
     } catch (err) {
@@ -879,23 +942,25 @@ function b64toBlob(b64Data, contentType = 'application/octet-stream') {
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     result.style.display = 'none';
-    showLoading('Simulating platform pipeline...');
+    showLoading('Simulating the platform pipeline…');
 
     try {
       const formData = new FormData(form);
-      const response = await fetch('/api/survive', { method: 'POST', body: formData });
+      const response = await apiFetch('/api/survive', { method: 'POST', body: formData });
       const data = await response.json();
       if (data.error) throw new Error(data.error);
 
       const st = data.survival_test || {};
-      result.innerHTML = `<div class="result-card ${st.survived ? 'success' : 'error'}">
-        <div class="result-title ${st.survived ? 'success-title' : 'error-title'}">${st.survived ? 'PASS' : 'FAIL'} - ${st.target || 'target'}</div>
-        <div class="result-grid">
-          <div class="result-key">Method</div><div class="result-val">${data.method}</div>
-          <div class="result-key">Wet paper</div><div class="result-val">${data.wet_paper ? 'Enabled' : 'Disabled'}</div>
-          <div class="result-key">Corrected bits</div><div class="result-val">${st.corrected_bits || 0}</div>
-          <div class="result-key">Notes</div><div class="result-val">${(data.target_profile && data.target_profile.notes) || ''}</div>
-        </div>
+      const ok = !!st.survived;
+      result.innerHTML = `<div class="result-card ${ok ? 'success' : 'error'}">
+        <div class="result-title ${ok ? 'success-title' : 'error-title'}">${ico(ok ? 'check' : 'x')} ${ok ? 'Payload survived' : 'Payload did not survive'} · ${esc(st.target || 'target')}</div>
+        ${renderGrid([
+          ['Method', esc(data.method)],
+          ['Wet paper', data.wet_paper ? 'enabled' : 'disabled'],
+          ['Corrected bits', Number(st.corrected_bits || 0).toLocaleString()],
+          ['Platform notes', esc((data.target_profile && data.target_profile.notes) || '')],
+          ['Detail', esc(st.error || '')],
+        ])}
       </div>`;
       result.style.display = 'block';
     } catch (err) {
@@ -916,36 +981,34 @@ function b64toBlob(b64Data, contentType = 'application/octet-stream') {
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     result.style.display = 'none';
-    showLoading('Analyzing differences. This might take a moment...');
+    showLoading('Comparing the files…');
 
     try {
       const formData = new FormData(form);
-      const response = await fetch('/diff', { method: 'POST', body: formData });
+      const response = await apiFetch('/diff', { method: 'POST', body: formData });
       const data = await response.json();
       if (data.error) throw new Error(data.error);
 
-      let metricsHtml = '';
+      let rows;
       if (data.type === 'image') {
-        metricsHtml = `
-          <div class="result-key">Pixels changed</div><div class="result-val">${(data.changed_pixels || 0).toLocaleString()} <span style="color:var(--text-muted);font-size:0.8rem">(${data.changed_percent}%)</span></div>
-          <div class="result-key">Max delta</div><div class="result-val">${data.max_delta}</div>
-          <div class="result-key">Mean delta</div><div class="result-val">${(data.mean_delta || 0).toFixed(4)}</div>
-        `;
+        rows = [
+          ['Type', 'image'],
+          ['Pixels changed', `${Number(data.changed_pixels || 0).toLocaleString()} (${esc(data.changed_percent)}%)`],
+          ['Max delta', esc(data.max_delta)],
+          ['Mean delta', Number(data.mean_delta || 0).toFixed(4)],
+        ];
       } else {
         const changedBytes = data.differing_bytes ?? data.changed_bytes ?? 0;
         const changedPercent = data.differing_percent ?? data.changed_percent ?? 0;
-        metricsHtml = `<div class="result-key">Bytes changed</div><div class="result-val">${Number(changedBytes).toLocaleString()} <span style="color:var(--text-muted);font-size:0.8rem">(${changedPercent}%)</span></div>`;
+        rows = [['Type', esc(data.type)], ['Bytes changed', `${Number(changedBytes).toLocaleString()} (${esc(changedPercent)}%)`]];
       }
 
       result.innerHTML = `<div class="result-card success">
-        <div class="result-title success-title">Diff Analysis Complete</div>
-        <div class="result-grid" style="margin-bottom:16px;">
-          <div class="result-key">Type</div><div class="result-val cyan">${data.type}</div>
-          ${metricsHtml}
-        </div>
-        ${data.heatmap_b64 ? `<div style="text-align:center;margin-top:12px;border:1px solid var(--border-subtle);border-radius:var(--radius-md);overflow:hidden;background:#000;"><img src="${data.heatmap_b64}" style="max-width:100%;height:auto;display:block;margin:0 auto;" alt="Heatmap showing changed pixels"></div>` : ''}
-        ${data.notes ? `<p style="margin-top:12px;font-size:0.85rem;color:var(--text-secondary)">${data.notes}</p>` : ''}
-      </div>`;
+        <div class="result-title success-title">${ico('diff')} Comparison complete</div>
+        ${renderGrid(rows)}
+        ${data.notes ? `<p style="margin-top:12px">${esc(data.notes)}</p>` : ''}
+      </div>
+      ${data.heatmap_b64 ? `<div class="result-card"><div class="result-title accent-title">Changed pixels</div><img class="result-image" src="${esc(data.heatmap_b64)}" alt="Heatmap of the pixels that differ between the two images"></div>` : ''}`;
       result.style.display = 'block';
     } catch (err) {
       result.innerHTML = renderError(err.message);
@@ -958,17 +1021,15 @@ function b64toBlob(b64Data, contentType = 'application/octet-stream') {
 
 initPlatformProfiles();
 
-// ── Key Strength Meter ────────────────────────────────────────────────────────
+// ── Passphrase strength (advisory only; the server enforces the real policy) ──
 function calcKeyStrength(pw) {
   if (!pw) return 0;
   const len = pw.length;
-  // character variety score
   let variety = 0;
   if (/[a-z]/.test(pw)) variety += 1;
   if (/[A-Z]/.test(pw)) variety += 1;
   if (/[0-9]/.test(pw)) variety += 1;
   if (/[^a-zA-Z0-9]/.test(pw)) variety += 1;
-  // Shannon entropy (bits/char)
   const freq = {};
   for (const ch of pw) freq[ch] = (freq[ch] || 0) + 1;
   let entropy = 0;
@@ -976,10 +1037,9 @@ function calcKeyStrength(pw) {
     const p = n / len;
     entropy -= p * Math.log2(p);
   }
-  // Composite score 0-100
-  const lenScore     = Math.min(len / 20, 1) * 40;
-  const varScore     = (variety / 4) * 30;
-  const entScore     = Math.min(entropy / 4, 1) * 30;
+  const lenScore = Math.min(len / 20, 1) * 40;
+  const varScore = (variety / 4) * 30;
+  const entScore = Math.min(entropy / 4, 1) * 30;
   return Math.round(lenScore + varScore + entScore);
 }
 
@@ -988,19 +1048,15 @@ function setupKeyStrengthMeter(inputId, meterId) {
   const meter = $(meterId);
   if (!input || !meter) return;
   function update() {
+    if (!input.value) { meter.innerHTML = ''; return; }
     const score = calcKeyStrength(input.value);
-    let label, color;
-    if (score >= 75) { label = 'Strong';   color = 'var(--accent-green)'; }
-    else if (score >= 50) { label = 'Fair';    color = 'var(--accent-yellow)'; }
-    else if (score >= 25) { label = 'Weak';    color = 'var(--accent-red)'; }
-    else { label = 'Very weak'; color = 'var(--accent-red)'; }
-    meter.innerHTML = `
-      <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
-        <div style="flex:1;height:3px;background:var(--bg-elevated);border-radius:2px;overflow:hidden">
-          <div style="width:${score}%;height:100%;background:${color};border-radius:2px;transition:width .3s,background .3s"></div>
-        </div>
-        <span style="font-size:.72rem;color:${color};min-width:60px">${label} (${score}%)</span>
-      </div>`;
+    const [label, tone] = score >= 75 ? ['Strong', 'var(--ok)']
+      : score >= 50 ? ['Fair', 'var(--accent)']
+        : score >= 25 ? ['Weak', 'var(--bad)'] : ['Very weak', 'var(--bad)'];
+    meter.innerHTML = `<div class="strength" style="--w:${score}%;--tone:${tone}">
+      <span class="strength-track"><span class="strength-fill"></span></span>
+      <span class="strength-label">${label}</span>
+    </div>`;
   }
   input.addEventListener('input', update);
   update();
@@ -1008,40 +1064,15 @@ function setupKeyStrengthMeter(inputId, meterId) {
 
 setupKeyStrengthMeter('enc-key', 'enc-key-strength');
 
-// ── Carrier Drop Preview (Encode) ─────────────────────────────────────────────
+// ── Carrier preview (encode) ──────────────────────────────────────────────────
 (function initCarrierPreview() {
   const carrierInput = $('enc-carrier');
   const previewBox = $('enc-carrier-preview');
   if (!carrierInput || !previewBox) return;
   carrierInput.addEventListener('change', () => {
     const file = carrierInput.files && carrierInput.files[0];
-    if (!file) { previewBox.style.display = 'none'; return; }
-    if (file.type.startsWith('image/')) {
-      const url = URL.createObjectURL(file);
-      previewBox.innerHTML = `<img src="${url}" alt="Carrier preview" style="max-height:120px;border-radius:8px;border:1px solid var(--border-subtle);margin-top:8px">`;
-      previewBox.style.display = 'block';
-    } else {
-      previewBox.style.display = 'none';
-    }
-  });
-})();
-
-// ── Mobile Nav Hamburger ──────────────────────────────────────────────────────
-(function initMobileNav() {
-  const hamburger = $('mobile-nav-toggle');
-  const navMenu   = document.querySelector('.tab-nav');
-  if (!hamburger || !navMenu) return;
-  hamburger.addEventListener('click', () => {
-    const open = navMenu.classList.toggle('mobile-open');
-    hamburger.setAttribute('aria-expanded', String(open));
-    hamburger.textContent = open ? '✕' : '☰';
-  });
-  // Close nav when a tab is selected on mobile
-  document.querySelectorAll('.tab-btn').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      navMenu.classList.remove('mobile-open');
-      hamburger.textContent = '☰';
-      hamburger.setAttribute('aria-expanded', 'false');
-    });
+    if (!file || !file.type.startsWith('image/')) { previewBox.style.display = 'none'; return; }
+    previewBox.innerHTML = `<img class="carrier-preview" src="${URL.createObjectURL(file)}" alt="Preview of the chosen carrier">`;
+    previewBox.style.display = 'block';
   });
 })();

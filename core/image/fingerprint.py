@@ -1,142 +1,88 @@
 """
-core/image/fingerprint.py - PRNU-aware LSB embedding.
+core/image/fingerprint.py — PRNU-aware LSB embedding.
 
-The encoder estimates local residual statistics from the carrier and constrains
-pixel adjustments to keep modifications inside a local noise envelope.
+Bits are written to the RGB samples in file order, but instead of overwriting
+the least significant bit (LSB *replacement*), a sample whose parity is wrong
+is moved by +1 or -1 (LSB *matching*): whichever step stays closest to the
+local noise residual statistics of the carrier.
+
+Wire format: ``[4-byte big-endian length][payload]``, one bit per sample.
 """
-import io
-import struct
+from __future__ import annotations
 
 import numpy as np
-from PIL import Image
-from scipy.ndimage import gaussian_filter, uniform_filter
 
 from core.base import BaseEncoder
+from core.bits import bits_to_bytes_np, bytes_to_bits_np, validate_payload_not_empty
+from core.image._io import load_rgb_alpha, save_rgb_alpha
 
-HEADER_FMT = ">I"
 HEADER_SIZE = 4
+MAX_PAYLOAD = 100_000_000
+# Cost of moving a sample by one level, on top of its z-score against the local residual.
+MOVE_PENALTY = 0.1
 
 
 class FingerprintEncoder(BaseEncoder):
     name = "fingerprint-lsb"
     supported_extensions = [".png", ".bmp", ".webp"]
 
+    def output_suffix(self, carrier_suffix: str) -> str:
+        s = carrier_suffix.lower()
+        return s if s in (".bmp", ".webp") else ".png"
+
     def capacity(self, carrier_bytes: bytes, **kwargs) -> int:
-        img = self._load_image(carrier_bytes)
-        arr = np.array(img, dtype=np.uint8)
-        return max(0, (arr.size // 8) - HEADER_SIZE)
+        rgb, _, _ = load_rgb_alpha(carrier_bytes)
+        return max(0, rgb.size // 8 - HEADER_SIZE)
 
     def encode(self, carrier_bytes: bytes, payload_bytes: bytes, progress_callback=None, **kwargs) -> bytes:
-        img = self._load_image(carrier_bytes)
-        fmt = (img.format or "PNG").upper()
-        arr = np.array(img, dtype=np.int16)
-        flat = arr.flatten()
-
-        cap = self.capacity(carrier_bytes)
+        validate_payload_not_empty(payload_bytes)
+        rgb, alpha, fmt = load_rgb_alpha(carrier_bytes)
+        cap = max(0, rgb.size // 8 - HEADER_SIZE)
         if len(payload_bytes) > cap:
             raise ValueError(f"Payload too large: {len(payload_bytes)} bytes, capacity: {cap} bytes")
 
-        # Estimate residual statistics per channel.
-        residual_mean, residual_std = _residual_stats(arr.astype(np.float32))
-        mean_flat = residual_mean.flatten()
-        std_flat = residual_std.flatten() + 1e-6
-
-        data = struct.pack(HEADER_FMT, len(payload_bytes)) + payload_bytes
-        bits = _bytes_to_bits(data)
-
+        bits = bytes_to_bits_np(len(payload_bytes).to_bytes(HEADER_SIZE, "big") + bytes(payload_bytes))
         n = len(bits)
-        for i, bit in enumerate(bits):
-            cur = int(flat[i])
-            if (cur & 1) == bit:
-                if progress_callback and i % 10000 == 0:
-                    progress_callback(i, n)
-                continue
+        if progress_callback:
+            progress_callback(0, n)
 
-            # Candidate +/-1 values that set target bit.
-            candidates = []
-            for delta in (-1, 1):
-                nv = cur + delta
-                if 0 <= nv <= 255 and (nv & 1) == bit:
-                    candidates.append(nv)
+        mean, std = _residual_stats(rgb.astype(np.float32))
+        mu = mean.reshape(-1)[:n]
+        sd = std.reshape(-1)[:n] + 1e-6
 
-            if not candidates:
-                flat[i] = cur ^ 1
-            else:
-                local_mu = float(mean_flat[i])
-                local_sd = float(std_flat[i])
-                best = candidates[0]
-                best_cost = 1e18
-                for cand in candidates:
-                    residual = float(cand - cur)
-                    z = abs((residual - local_mu) / local_sd)
-                    # Penalize large residual outliers and unnecessary pixel movement.
-                    cost = z + abs(cand - cur) * 0.1
-                    if cost < best_cost:
-                        best_cost = cost
-                        best = cand
-                flat[i] = best
-
-            if progress_callback and i % 10000 == 0:
-                progress_callback(i, n)
+        flat = rgb.reshape(-1)
+        cur = flat[:n].astype(np.int16)
+        wrong = (cur & 1) != bits
+        # A wrong-parity sample moves one level; pick the step closest to the local residual.
+        cost_down = np.abs((-1.0 - mu) / sd) + MOVE_PENALTY
+        cost_up = np.abs((1.0 - mu) / sd) + MOVE_PENALTY
+        can_down, can_up = cur >= 1, cur <= 254
+        go_up = can_up & (~can_down | (cost_up < cost_down))
+        step = np.where(go_up, 1, -1).astype(np.int16)
+        flat[:n] = np.where(wrong, cur + step, cur).astype(np.uint8)
 
         if progress_callback:
             progress_callback(n, n)
-
-        stego = np.clip(flat.reshape(arr.shape), 0, 255).astype(np.uint8)
-        out = Image.fromarray(stego, mode="RGB")
-
-        buf = io.BytesIO()
-        if fmt == "WEBP":
-            out.save(buf, format="WEBP", lossless=True)
-        elif fmt == "BMP":
-            out.save(buf, format="BMP")
-        else:
-            out.save(buf, format="PNG")
-        return buf.getvalue()
+        return save_rgb_alpha(rgb, alpha, fmt)
 
     def decode(self, stego_bytes: bytes, **kwargs) -> bytes:
-        img = self._load_image(stego_bytes)
-        arr = np.array(img, dtype=np.uint8).flatten()
-
-        header_bits = [(int(arr[i]) & 1) for i in range(HEADER_SIZE * 8)]
-        length = struct.unpack(HEADER_FMT, _bits_to_bytes(header_bits))[0]
-        max_cap = self.capacity(stego_bytes)
-        if length <= 0 or length > max_cap:
+        rgb, _, _ = load_rgb_alpha(stego_bytes)
+        flat = rgb.reshape(-1)
+        if flat.size < HEADER_SIZE * 8:
+            raise ValueError("Carrier too small to contain a valid payload header")
+        length = int.from_bytes(bits_to_bytes_np(flat[:HEADER_SIZE * 8] & 1), "big")
+        max_cap = max(0, flat.size // 8 - HEADER_SIZE)
+        if length <= 0 or length > min(max_cap, MAX_PAYLOAD):
             raise ValueError(f"Invalid fingerprint payload length: {length}")
-
-        total_bits = (HEADER_SIZE + length) * 8
-        bits = [(int(arr[i]) & 1) for i in range(total_bits)]
-        return _bits_to_bytes(bits[HEADER_SIZE * 8:total_bits])
-
-    def _load_image(self, data: bytes) -> Image.Image:
-        img = Image.open(io.BytesIO(data))
-        if img.mode != "RGB":
-            img = img.convert("RGB")
-        return img
+        return bits_to_bytes_np(flat[:(HEADER_SIZE + length) * 8] & 1)[HEADER_SIZE:]
 
 
 def _residual_stats(arr: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    from scipy.ndimage import gaussian_filter, uniform_filter  # lazy: import cost only on use
+
     blurred = gaussian_filter(arr, sigma=(1.0, 1.0, 0.0), mode="reflect")
     residual = arr - blurred
     mu = uniform_filter(residual, size=(5, 5, 1), mode="reflect")
     mu2 = uniform_filter(residual * residual, size=(5, 5, 1), mode="reflect")
     var = np.maximum(mu2 - mu * mu, 1e-6)
     return mu, np.sqrt(var)
-
-
-def _bytes_to_bits(data: bytes) -> list[int]:
-    bits = []
-    for byte in data:
-        for i in range(7, -1, -1):
-            bits.append((byte >> i) & 1)
-    return bits
-
-
-def _bits_to_bytes(bits: list[int]) -> bytes:
-    out = []
-    for i in range(0, len(bits) - 7, 8):
-        val = 0
-        for b in bits[i:i + 8]:
-            val = (val << 1) | b
-        out.append(val)
-    return bytes(out)

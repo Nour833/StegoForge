@@ -1,151 +1,152 @@
 """
-core/image/palette.py — Indexed-color palette reordering for GIF and indexed PNG.
+core/image/palette.py — indexed-colour palette reordering (GIF / palette PNG).
 
-The palette of an indexed image is an ordered list of RGB triplets.
-The order can be changed without changing visible colors — as long as
-pixel index values are updated to point to the same color in its new position.
+The order of an indexed image's palette can change without changing any visible
+colour, as long as every pixel index (and the transparency index) is remapped
+to follow its colour.
 
-Encoding strategy:
-  - Use pairs of palette entries: the relative order of each pair encodes 1 bit.
-  - Pair (i, j): if palette[i] < palette[j] (by sum of RGB) → bit=0; else bit=1.
-  - This is low capacity: max palette of 256 entries → ~127 bit pairs = ~15 bytes.
+Encoding: palette entries are taken in pairs. The relative order of a pair's
+colour sums encodes one bit: ``sum(a) <  sum(b)`` -> 0, otherwise -> 1.
+Capacity is tiny (a 256-colour palette holds 128 bits, i.e. 14 payload bytes
+after the 2-byte length header), so this method suits very short messages —
+it cannot carry an AES envelope, which alone is larger than that. Use it with
+``--allow-plaintext`` for a few bytes, or pick another method.
 
-Note: Capacity is very small. This method is best for tiny hidden messages.
+Wire format: ``[2-byte big-endian length][payload]``.
 """
+from __future__ import annotations
+
 import io
-import struct
+from collections import defaultdict, deque
+
+import numpy as np
 from PIL import Image
 
 from core.base import BaseEncoder
+from core.bits import bits_to_bytes_np, bytes_to_bits_np, validate_payload_not_empty
 
-HEADER_FMT = ">H"  # 2 bytes for length (max 65535 bytes, but real capacity is ~15)
 HEADER_SIZE = 2
+MAX_PAYLOAD = 10_000
 
 
 class PaletteEncoder(BaseEncoder):
     name = "palette"
     supported_extensions = [".gif", ".png"]
 
-    def _load_indexed(self, data: bytes) -> Image.Image:
+    def output_suffix(self, carrier_suffix: str) -> str:
+        return carrier_suffix if carrier_suffix.lower() in (".gif", ".png") else ".gif"
+
+    def capacity(self, carrier_bytes: bytes, **kwargs) -> int:
+        palette = self._palette_rgb(self._load_indexed(carrier_bytes))
+        return max(0, (len(palette) // 2) // 8 - HEADER_SIZE)
+
+    def encode(self, carrier_bytes: bytes, payload_bytes: bytes, **kwargs) -> bytes:
+        validate_payload_not_empty(payload_bytes)
+        img = self._load_indexed(carrier_bytes)
+        palette = self._palette_rgb(img)
+        n_pairs = len(palette) // 2
+
+        cap = max(0, n_pairs // 8 - HEADER_SIZE)
+        if len(payload_bytes) > cap:
+            raise ValueError(f"Payload too large: {len(payload_bytes)} bytes, palette capacity: {cap} bytes")
+
+        bits = bytes_to_bits_np(len(payload_bytes).to_bytes(HEADER_SIZE, "big") + bytes(payload_bytes))
+        new_palette = list(palette)
+        for i, bit in enumerate(bits.tolist()):
+            a, b = new_palette[2 * i], new_palette[2 * i + 1]
+            if bit == 0:
+                if sum(a) > sum(b):
+                    new_palette[2 * i], new_palette[2 * i + 1] = b, a
+                elif sum(a) == sum(b):
+                    # Equal sums decode as 1: nudge one channel by 1 to encode 0.
+                    r, g, bl = a
+                    if r > 0:
+                        new_palette[2 * i] = (r - 1, g, bl)
+                    elif g > 0:
+                        new_palette[2 * i] = (r, g - 1, bl)
+                    elif bl > 0:
+                        new_palette[2 * i] = (r, g, bl - 1)
+                    else:
+                        r2, g2, b2 = b
+                        new_palette[2 * i + 1] = (min(255, r2 + 1), g2, b2)
+            elif sum(a) < sum(b):
+                new_palette[2 * i], new_palette[2 * i + 1] = b, a
+
+        # old index -> new index: each colour follows its new position
+        # (a queue per colour handles duplicate palette entries).
+        slots: dict[tuple[int, int, int], deque[int]] = defaultdict(deque)
+        for new_idx, colour in enumerate(new_palette):
+            slots[colour].append(new_idx)
+        old_to_new = np.arange(len(palette), dtype=np.uint16)
+        for old_idx, colour in enumerate(palette):
+            if slots.get(colour):
+                old_to_new[old_idx] = slots[colour].popleft()
+
+        pixels = np.array(img, dtype=np.uint16)
+        limit = len(old_to_new)
+        pixels = np.where(pixels < limit, old_to_new[np.minimum(pixels, limit - 1)], pixels).astype(np.uint8)
+
+        out = Image.new("P", img.size)
+        out.putpalette([c for rgb in new_palette for c in rgb])
+        out.putdata(pixels.ravel().tolist())
+        info = self._remap_transparency(img.info, old_to_new)
+
+        buf = io.BytesIO()
+        out.save(buf, format=img.format or "GIF", **info)
+        stego = buf.getvalue()
+        # Never report success on a payload that cannot be read back.
+        if self.decode(stego) != bytes(payload_bytes):
+            raise ValueError("Palette embedding did not survive saving this image; use another method")
+        return stego
+
+    def decode(self, stego_bytes: bytes, **kwargs) -> bytes:
+        palette = self._palette_rgb(self._load_indexed(stego_bytes))
+        sums = np.array([sum(c) for c in palette], dtype=np.int32)
+        n_pairs = len(palette) // 2
+        bits = (sums[0:2 * n_pairs:2] >= sums[1:2 * n_pairs:2]).astype(np.uint8)
+
+        if len(bits) < HEADER_SIZE * 8:
+            raise ValueError("Not enough palette pairs to read header")
+        length = int.from_bytes(bits_to_bytes_np(bits[:HEADER_SIZE * 8]), "big")
+        if length == 0 or length > MAX_PAYLOAD:
+            raise ValueError(f"Invalid payload length in palette header: {length}")
+        total_bits = (HEADER_SIZE + length) * 8
+        if len(bits) < total_bits:
+            raise ValueError("Not enough palette pairs to decode payload")
+        return bits_to_bytes_np(bits[HEADER_SIZE * 8:total_bits])
+
+    # ── internals ─────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _load_indexed(data: bytes) -> Image.Image:
         img = Image.open(io.BytesIO(data))
         if img.mode != "P":
             raise ValueError(
                 f"Palette encoder requires an indexed-color (mode 'P') image. "
                 f"Got mode: {img.mode}. Use a GIF or indexed PNG."
             )
+        if getattr(img, "n_frames", 1) > 1:
+            raise ValueError("Animated images are not supported by the palette method (only one frame would survive)")
+        img.load()
         return img
 
-    def _get_palette_rgb(self, img: Image.Image) -> list[tuple[int, int, int]]:
-        raw = img.getpalette()  # flat list: [R0,G0,B0, R1,G1,B1, ...]
-        return [(raw[i], raw[i + 1], raw[i + 2]) for i in range(0, len(raw), 3)]
+    @staticmethod
+    def _palette_rgb(img: Image.Image) -> list[tuple[int, int, int]]:
+        raw = img.getpalette() or []
+        return [(raw[i], raw[i + 1], raw[i + 2]) for i in range(0, len(raw) - 2, 3)]
 
-    def capacity(self, carrier_bytes: bytes, **kwargs) -> int:
-        img = self._load_indexed(carrier_bytes)
-        palette = self._get_palette_rgb(img)
-        n_pairs = len(palette) // 2
-        usable_bits = n_pairs
-        return max(0, (usable_bits // 8) - HEADER_SIZE)
-
-    def encode(self, carrier_bytes: bytes, payload_bytes: bytes, **kwargs) -> bytes:
-        img = self._load_indexed(carrier_bytes)
-        palette = self._get_palette_rgb(img)
-        n_pairs = len(palette) // 2
-
-        cap = (n_pairs // 8) - HEADER_SIZE
-        if len(payload_bytes) > cap:
-            raise ValueError(
-                f"Payload too large: {len(payload_bytes)} bytes, "
-                f"palette capacity: {cap} bytes"
-            )
-
-        data = struct.pack(HEADER_FMT, len(payload_bytes)) + payload_bytes
-        bits = _bytes_to_bits(data)
-
-        # Encode each bit as the relative order of a palette pair
-        # bit=0 → ensure palette[2i] "less than" palette[2i+1] (sum of RGB)
-        # bit=1 → ensure palette[2i] "greater than" palette[2i+1]
-        new_palette = list(palette)
-        for i, bit in enumerate(bits):
-            if i >= n_pairs:
-                break
-            a = new_palette[2 * i]
-            b = new_palette[2 * i + 1]
-            a_sum = sum(a)
-            b_sum = sum(b)
-            if bit == 0:
-                # Ensure a < b
-                if a_sum > b_sum:
-                    new_palette[2 * i], new_palette[2 * i + 1] = b, a
-            else:
-                # Ensure a >= b
-                if a_sum < b_sum:
-                    new_palette[2 * i], new_palette[2 * i + 1] = b, a
-
-        # Build pixel remapping: each pixel pointing to old index
-        # needs to point to the index that now holds that color
-        old_to_new = {}
-        for old_idx, color in enumerate(palette):
-            for new_idx, new_color in enumerate(new_palette):
-                if new_color == color and new_idx not in old_to_new.values():
-                    old_to_new[old_idx] = new_idx
-                    break
-
-        # Remap pixels (use numpy to avoid Pillow 14 getdata() deprecation)
-        import numpy as np
-        pixels = np.array(img).flatten().tolist()
-        new_pixels = [old_to_new.get(p, p) for p in pixels]
-
-        stego_img = img.copy()
-        flat_palette = []
-        for r, g, b in new_palette:
-            flat_palette.extend([r, g, b])
-        stego_img.putpalette(flat_palette)
-        stego_img.putdata(new_pixels)
-
-        buf = io.BytesIO()
-        fmt = img.format or "GIF"
-        stego_img.save(buf, format=fmt)
-        return buf.getvalue()
-
-    def decode(self, stego_bytes: bytes, **kwargs) -> bytes:
-        img = self._load_indexed(stego_bytes)
-        palette = self._get_palette_rgb(img)
-        n_pairs = len(palette) // 2
-
-        bits = []
-        for i in range(n_pairs):
-            a = palette[2 * i]
-            b = palette[2 * i + 1]
-            bit = 1 if sum(a) >= sum(b) else 0
-            bits.append(bit)
-
-        if len(bits) < HEADER_SIZE * 8:
-            raise ValueError("Not enough palette pairs to read header")
-
-        length = struct.unpack(HEADER_FMT, _bits_to_bytes(bits[:HEADER_SIZE * 8]))[0]
-        if length == 0 or length > 10000:
-            raise ValueError(f"Invalid payload length in palette header: {length}")
-
-        total_bits = (HEADER_SIZE + length) * 8
-        if len(bits) < total_bits:
-            raise ValueError("Not enough palette pairs to decode payload")
-
-        return _bits_to_bytes(bits[HEADER_SIZE * 8:total_bits])
-
-
-def _bytes_to_bits(data: bytes) -> list[int]:
-    bits = []
-    for byte in data:
-        for i in range(7, -1, -1):
-            bits.append((byte >> i) & 1)
-    return bits
-
-
-def _bits_to_bytes(bits: list[int]) -> bytes:
-    result = []
-    for i in range(0, len(bits) - 7, 8):
-        val = 0
-        for b in bits[i:i + 8]:
-            val = (val << 1) | b
-        result.append(val)
-    return bytes(result)
+    @staticmethod
+    def _remap_transparency(info: dict, old_to_new: np.ndarray) -> dict:
+        """Carry the transparency index/table along with the reordered palette."""
+        t = info.get("transparency")
+        if t is None:
+            return {}
+        if isinstance(t, int):
+            return {"transparency": int(old_to_new[t]) if t < len(old_to_new) else t}
+        if isinstance(t, (bytes, bytearray)):
+            table = bytearray([255]) * len(old_to_new)
+            for old_idx, alpha in enumerate(bytes(t)):
+                if old_idx < len(old_to_new):
+                    table[int(old_to_new[old_idx])] = alpha
+            return {"transparency": bytes(table)}
+        return {}

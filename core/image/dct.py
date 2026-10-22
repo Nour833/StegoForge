@@ -1,29 +1,35 @@
 """
-core/image/dct.py — DCT coefficient steganography for JPEG images.
+core/image/dct.py — DCT sign-modulation steganography for JPEG.
 
-This implementation takes a more reliable approach:
-1. Load the JPEG → pixel array
-2. Hide bits using a mid-frequency DCT approach with Watson-style JND constraints:
-   - Work in 8×8 DCT blocks on the spatial domain
-    - Compute a perceptual threshold per block/coefficient
-    - Encode by setting coefficient sign (positive = 0, negative = 1) with minimum
-      magnitude constrained by the local JND threshold
-3. Save as JPEG quality 95 with no chroma subsampling
+Method (honest summary): the image is decoded to pixels, the **green channel**
+is split into 8x8 blocks, and the sign of the mid-frequency DCT coefficient
+(4, 4) of each block carries one bit (positive = 0, negative = 1). The
+coefficient magnitude is raised to a Watson-style perceptual floor so the sign
+survives JPEG quantisation, and the result is saved as JPEG (quality 95, 4:4:4).
 
-Capacity: ~(W/8 × H/8) bits per channel, minus header overhead
+This works on the *pixel-domain* DCT of the decoded image, not on the stored
+quantised JPEG coefficients, so it is a robust, simple scheme rather than an
+F5/OutGuess-class one. Measured bit-error rate after re-compression is 0 down
+to JPEG quality 76 (see ``tests/test_image_dct.py``).
+
+Wire format: ``[4-byte big-endian length][payload]``, one bit per 8x8 block.
 """
+from __future__ import annotations
+
 import io
-import struct
+import warnings
+
 import numpy as np
 from PIL import Image
-from scipy.fft import dct as scipy_dct, idct as scipy_idct
 
 from core.base import BaseEncoder
+from core.bits import bits_to_bytes_np, bytes_to_bits_np, validate_payload_not_empty
+from core.image._io import check_pixel_budget
 
-HEADER_FMT = ">I"
 HEADER_SIZE = 4
+MAX_PAYLOAD = 100_000_000
 BLOCK = 8
-# Use coefficient (4, 4) — mid-frequency, carries good signal, survives JPEG
+# Coefficient (4, 4): mid-frequency, carries signal and survives quantisation.
 TARGET_ROW = 4
 TARGET_COL = 4
 JND_EMBED_FLOOR = 18.0
@@ -35,7 +41,7 @@ WATSON_CONTRAST_GAMMA = 0.7
 JND_SAFE_MAX_THRESHOLD = 42.0
 MEAN_LUMA_REF = 128.0
 
-# JPEG luminance quantization table (quality 50 baseline) used as masking prior.
+# JPEG luminance quantisation table (quality 50 baseline) used as masking prior.
 JPEG_LUMA_QTABLE = np.array([
     [16, 11, 10, 16, 24, 40, 51, 61],
     [12, 12, 14, 19, 26, 58, 60, 55],
@@ -48,170 +54,136 @@ JPEG_LUMA_QTABLE = np.array([
 ], dtype=np.float64)
 
 
+def _fft():
+    from scipy.fft import dctn, idctn  # lazy: keeps import fast without scipy
+
+    return dctn, idctn
+
+
+def _blocks(plane: np.ndarray) -> np.ndarray:
+    """Reshape a 2-D plane to (rows, cols, 8, 8) blocks, cropping any ragged edge."""
+    nbh, nbw = plane.shape[0] // BLOCK, plane.shape[1] // BLOCK
+    return plane[:nbh * BLOCK, :nbw * BLOCK].reshape(nbh, BLOCK, nbw, BLOCK).transpose(0, 2, 1, 3)
+
+
 class DCTEncoder(BaseEncoder):
     name = "dct"
     supported_extensions = [".jpg", ".jpeg"]
 
-    def _load_jpeg(self, data: bytes) -> Image.Image:
-        img = Image.open(io.BytesIO(data))
-        if img.mode == "RGBA":
-            img = img.convert("RGB")
-        elif img.mode not in ("RGB", "L"):
-            img = img.convert("RGB")
-        return img
+    def output_suffix(self, carrier_suffix: str) -> str:
+        return ".jpeg" if carrier_suffix.lower() == ".jpeg" else ".jpg"
 
     def capacity(self, carrier_bytes: bytes, **kwargs) -> int:
         img = self._load_jpeg(carrier_bytes)
         w, h = img.size
-        n_blocks = (w // BLOCK) * (h // BLOCK)
-        return (n_blocks // 8) - HEADER_SIZE
+        return max(0, ((w // BLOCK) * (h // BLOCK)) // 8 - HEADER_SIZE)
 
     def jnd_safe_capacity(self, carrier_bytes: bytes) -> int:
-        """
-        Estimate a conservative perceptual (JND-safe) payload budget.
-
-        This heuristic models that only a subset of mid-frequency coefficients in
-        each 8x8 block can be modified without noticeable artifacts.
-        """
-        img = self._load_jpeg(carrier_bytes)
-        arr = np.array(img.convert("L"), dtype=np.float32)
-        h, w = arr.shape
-
-        usable_bits = 0
-        for row in range(0, h - BLOCK + 1, BLOCK):
-            for col in range(0, w - BLOCK + 1, BLOCK):
-                block = arr[row:row + BLOCK, col:col + BLOCK]
-                coeff = _dct2(block)
-                jnd = _watson_jnd_threshold(coeff, block)
-                if jnd <= JND_SAFE_MAX_THRESHOLD:
-                    usable_bits += 1
-
-        return max(0, (usable_bits // 8) - HEADER_SIZE)
+        """Conservative perceptual (JND-safe) payload budget for this carrier."""
+        arr = np.array(self._load_jpeg(carrier_bytes).convert("L"), dtype=np.float32)
+        if arr.shape[0] < BLOCK or arr.shape[1] < BLOCK:
+            return 0
+        dctn, _ = _fft()
+        blocks = _blocks(arr)
+        coeffs = dctn(blocks, type=2, norm="ortho", axes=(-2, -1))
+        target = np.abs(coeffs[:, :, TARGET_ROW, TARGET_COL])
+        means = blocks.mean(axis=(-2, -1))
+        t_luma = JPEG_LUMA_QTABLE[TARGET_ROW, TARGET_COL] * np.power(
+            np.maximum(means, 1.0) / MEAN_LUMA_REF, WATSON_LUMA_ALPHA
+        )
+        t_contrast = np.maximum(
+            t_luma,
+            np.power(target + 1e-6, WATSON_CONTRAST_GAMMA) * np.power(t_luma, 1.0 - WATSON_CONTRAST_GAMMA),
+        )
+        usable_bits = int(np.sum(t_contrast <= JND_SAFE_MAX_THRESHOLD))
+        return max(0, usable_bits // 8 - HEADER_SIZE)
 
     def encode(self, carrier_bytes: bytes, payload_bytes: bytes, **kwargs) -> bytes:
+        validate_payload_not_empty(payload_bytes)
         img = self._load_jpeg(carrier_bytes)
         arr = np.array(img, dtype=np.float64)
         h, w = arr.shape[:2]
-        channels = 1 if len(arr.shape) == 2 else arr.shape[2]
 
-        cap = self.capacity(carrier_bytes)
+        cap = max(0, ((w // BLOCK) * (h // BLOCK)) // 8 - HEADER_SIZE)
         if len(payload_bytes) > cap:
-            raise ValueError(
-                f"Payload too large: {len(payload_bytes)} bytes, DCT capacity: {cap} bytes"
-            )
+            raise ValueError(f"Payload too large: {len(payload_bytes)} bytes, DCT capacity: {cap} bytes")
 
-        data = struct.pack(HEADER_FMT, len(payload_bytes)) + payload_bytes
-        bits = _bytes_to_bits(data)
-        bit_idx = 0
+        bits = bytes_to_bits_np(len(payload_bytes).to_bytes(HEADER_SIZE, "big") + bytes(payload_bytes))
 
-        # Work on green channel for RGB (index 1), or the only channel
-        chan_idx = 1 if channels >= 3 else 0
+        # Work on the green channel for colour images, or the only channel.
+        chan_idx = 1 if arr.ndim == 3 else None
+        work = arr[:, :, chan_idx].copy() if chan_idx is not None else arr.copy()
 
-        if channels >= 3:
-            work_chan = arr[:, :, chan_idx].copy()
+        dctn, idctn = _fft()
+        blocks = _blocks(work)
+        nbh, nbw = blocks.shape[:2]
+        dcts = dctn(blocks, type=2, norm="ortho", axes=(-2, -1))
+
+        nbits = min(len(bits), nbh * nbw)
+        flat_dcts = dcts.reshape(-1, BLOCK, BLOCK)
+        cur = np.abs(flat_dcts[:nbits, TARGET_ROW, TARGET_COL])
+        means = blocks.reshape(-1, BLOCK, BLOCK)[:nbits].mean(axis=(-2, -1))
+        t_luma = float(JPEG_LUMA_QTABLE[TARGET_ROW, TARGET_COL]) * np.power(
+            np.maximum(means, 1.0) / MEAN_LUMA_REF, WATSON_LUMA_ALPHA
+        )
+        t_contrast = np.maximum(
+            t_luma,
+            np.power(cur + 1e-6, WATSON_CONTRAST_GAMMA) * np.power(t_luma, 1.0 - WATSON_CONTRAST_GAMMA),
+        )
+        target_abs = np.maximum(JND_EMBED_FLOOR, t_contrast * JND_EMBED_MULT)
+        signs = np.where(bits[:nbits] == 0, 1.0, -1.0)
+        flat_dcts[:nbits, TARGET_ROW, TARGET_COL] = signs * np.maximum(cur, target_abs)
+
+        restored = idctn(flat_dcts.reshape(nbh, nbw, BLOCK, BLOCK), norm="ortho", axes=(-2, -1))
+        work[:nbh * BLOCK, :nbw * BLOCK] = restored.transpose(0, 2, 1, 3).reshape(nbh * BLOCK, nbw * BLOCK)
+        if chan_idx is not None:
+            arr[:, :, chan_idx] = work
         else:
-            work_chan = arr.copy()
+            arr = work
 
-        for row in range(0, h - BLOCK + 1, BLOCK):
-            for col in range(0, w - BLOCK + 1, BLOCK):
-                if bit_idx >= len(bits):
-                    break
-                block = work_chan[row:row + BLOCK, col:col + BLOCK]
-                block_dct = _dct2(block)
-                jnd = _watson_jnd_threshold(block_dct, block)
-
-                bit = bits[bit_idx]
-                target_sign = 1.0 if bit == 0 else -1.0
-                target_abs = max(JND_EMBED_FLOOR, jnd * JND_EMBED_MULT)
-                cur = block_dct[TARGET_ROW, TARGET_COL]
-                block_dct[TARGET_ROW, TARGET_COL] = target_sign * max(abs(cur), target_abs)
-
-                work_chan[row:row + BLOCK, col:col + BLOCK] = _idct2(block_dct)
-                bit_idx += 1
-
-        if channels >= 3:
-            arr[:, :, chan_idx] = work_chan
-        else:
-            arr = work_chan
-
-        arr = np.clip(arr, 0, 255).astype(np.uint8)
-        stego_img = Image.fromarray(arr, mode=img.mode)
-
+        save_kwargs: dict = {"format": "JPEG", "quality": 95, "subsampling": 0}
+        for k in ("icc_profile", "exif"):
+            if img.info.get(k):
+                save_kwargs[k] = img.info[k]
         buf = io.BytesIO()
-        stego_img.save(buf, format="JPEG", quality=95, subsampling=0)
-        return buf.getvalue()
+        Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8)).save(buf, **save_kwargs)
+        stego = buf.getvalue()
+
+        # Never report success on a payload that JPEG quantisation destroyed.
+        if self.decode(stego) != bytes(payload_bytes):
+            raise ValueError("DCT embedding did not survive JPEG quantisation for this carrier; use a larger or more textured image")
+        return stego
 
     def decode(self, stego_bytes: bytes, **kwargs) -> bytes:
         img = self._load_jpeg(stego_bytes)
         arr = np.array(img, dtype=np.float64)
-        h, w = arr.shape[:2]
-        channels = 1 if len(arr.shape) == 2 else arr.shape[2]
-
-        chan_idx = 1 if channels >= 3 else 0
-        if channels >= 3:
-            work_chan = arr[:, :, chan_idx]
-        else:
-            work_chan = arr
-
-        all_bits = []
-        for row in range(0, h - BLOCK + 1, BLOCK):
-            for col in range(0, w - BLOCK + 1, BLOCK):
-                block = work_chan[row:row + BLOCK, col:col + BLOCK]
-                block_dct = _dct2(block)
-                coeff = block_dct[TARGET_ROW, TARGET_COL]
-                # Positive = 0, Negative = 1
-                all_bits.append(0 if coeff >= 0 else 1)
-
-        if len(all_bits) < HEADER_SIZE * 8:
+        plane = arr[:, :, 1] if arr.ndim == 3 else arr
+        if plane.shape[0] < BLOCK or plane.shape[1] < BLOCK:
             raise ValueError("Carrier too small to contain DCT header")
 
-        length = struct.unpack(HEADER_FMT, _bits_to_bytes(all_bits[:HEADER_SIZE * 8]))[0]
-        if length == 0 or length > 100_000_000:
+        dctn, _ = _fft()
+        coeffs = dctn(_blocks(plane), type=2, norm="ortho", axes=(-2, -1))[:, :, TARGET_ROW, TARGET_COL].reshape(-1)
+        bits = (coeffs < 0).astype(np.uint8)  # positive = 0, negative = 1
+
+        if len(bits) < HEADER_SIZE * 8:
+            raise ValueError("Carrier too small to contain DCT header")
+        length = int.from_bytes(bits_to_bytes_np(bits[:HEADER_SIZE * 8]), "big")
+        if length == 0 or length > MAX_PAYLOAD:
             raise ValueError(f"Invalid DCT payload length: {length}")
-
         total_bits = (HEADER_SIZE + length) * 8
-        if len(all_bits) < total_bits:
+        if len(bits) < total_bits:
             raise ValueError("Not enough DCT blocks to decode payload")
+        return bits_to_bytes_np(bits[HEADER_SIZE * 8:total_bits])
 
-        return _bits_to_bytes(all_bits[HEADER_SIZE * 8:total_bits])
-
-
-def _dct2(block: np.ndarray) -> np.ndarray:
-    return scipy_dct(scipy_dct(block.T, norm="ortho").T, norm="ortho")
-
-
-def _idct2(block: np.ndarray) -> np.ndarray:
-    return scipy_idct(scipy_idct(block.T, norm="ortho").T, norm="ortho")
-
-
-def _watson_jnd_threshold(block_dct: np.ndarray, block_spatial: np.ndarray) -> float:
-    base = float(JPEG_LUMA_QTABLE[TARGET_ROW, TARGET_COL])
-
-    # Luminance masking: brighter blocks can tolerate slightly stronger changes.
-    block_mean = max(float(np.mean(block_spatial)), 1.0)
-    luma_scale = (block_mean / MEAN_LUMA_REF) ** WATSON_LUMA_ALPHA
-    t_luma = base * luma_scale
-
-    # Contrast masking: if coefficient energy already exists, larger changes blend in.
-    c_abs = abs(float(block_dct[TARGET_ROW, TARGET_COL]))
-    t_contrast = max(t_luma, (c_abs + 1e-6) ** WATSON_CONTRAST_GAMMA * (t_luma ** (1.0 - WATSON_CONTRAST_GAMMA)))
-
-    return float(max(1.0, t_contrast))
-
-
-def _bytes_to_bits(data: bytes) -> list[int]:
-    bits = []
-    for byte in data:
-        for i in range(7, -1, -1):
-            bits.append((byte >> i) & 1)
-    return bits
-
-
-def _bits_to_bytes(bits: list[int]) -> bytes:
-    result = []
-    for i in range(0, len(bits) - 7, 8):
-        val = 0
-        for b in bits[i:i + 8]:
-            val = (val << 1) | b
-        result.append(val)
-    return bytes(result)
+    @staticmethod
+    def _load_jpeg(data: bytes) -> Image.Image:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", Image.DecompressionBombWarning)
+            opened = Image.open(io.BytesIO(data))
+            check_pixel_budget(opened.size)
+            opened.load()
+        if opened.mode in ("RGB", "L"):
+            return opened
+        img = opened.convert("RGB")
+        img.info.pop("icc_profile", None)  # e.g. a CMYK profile no longer describes the pixels
+        return img

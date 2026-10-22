@@ -1,11 +1,32 @@
 """
-detect/binary.py - ELF/PE binary anomaly detector.
+detect/binary.py — ELF/PE slack-space detector.
+
+Evidence is limited to regions that a linker leaves *zero-filled*: the file
+padding between ELF sections and the raw-size tail of PE sections. Non-zero,
+non-uniform bytes there are not produced by toolchains, but are exactly what a
+slack-space embed writes.
+
+NOTE sections and PE overlays are deliberately **not** evidence: they hold real
+data (build-id, GNU properties, SystemTap probes, Authenticode signatures,
+installers), so "non-zero" says nothing about them. Treating them as slack made
+every system binary look hidden-data-bearing. A validated StegoForge extraction
+remains a definitive positive wherever the payload lives.
 """
 from __future__ import annotations
 
-import math
+import logging
+
+import numpy as np
 
 from detect.base import BaseDetector, DetectionResult
+
+log = logging.getLogger(__name__)
+
+# Region labels whose contents a toolchain leaves as zeros (anything else is informational).
+_EVIDENCE_PREFIXES = ("section_padding", "section_slack")
+_LOW_BITS_MAX = 3            # a 2-bit-per-byte embed turns zero padding into values 0..3
+_MIN_EVIDENCE_BYTES = 4      # fewer non-zero padding bytes than this is treated as noise
+_FILL_DOMINANCE = 0.9        # share of one repeated non-zero byte that makes padding a toolchain fill
 
 
 class BinaryDetector(BaseDetector):
@@ -13,8 +34,6 @@ class BinaryDetector(BaseDetector):
     supported_extensions = [".elf", ".exe", ".dll", ".bin"]
 
     def analyze(self, file_bytes: bytes, filename: str = "") -> DetectionResult:
-        findings = []
-
         if file_bytes.startswith(b"\x7fELF"):
             btype = "ELF"
             regions = _elf_slack_regions(file_bytes)
@@ -29,73 +48,77 @@ class BinaryDetector(BaseDetector):
                 details={"skipped": True, "interpretation": "Not an ELF/PE binary"},
             )
 
-        total = 0
-        suspicious = 0
-        high_entropy_regions = 0
-        nonzero_regions = 0
+        view = np.frombuffer(file_bytes, dtype=np.uint8)
+        findings: list[dict] = []
+        evidence_regions = 0
+        evidence_bytes = 0
+        two_bit_regions = 0
+        informational = 0
+        scanned = 0
 
         for start, end, label in regions:
             if end <= start or start < 0 or end > len(file_bytes):
                 continue
-            chunk = file_bytes[start:end]
-            total += len(chunk)
-            nz = sum(1 for b in chunk if b != 0)
-            ent = _entropy(chunk)
-
-            if nz > 0:
-                nonzero_regions += 1
+            chunk = view[start:end]
+            nonzero = int(np.count_nonzero(chunk))
+            if not label.startswith(_EVIDENCE_PREFIXES):
+                informational += 1 if nonzero else 0
+                continue
+            scanned += 1
+            if nonzero == 0 or _is_toolchain_fill(chunk):
+                continue
+            evidence_regions += 1
+            evidence_bytes += nonzero
+            findings.append({
+                "field": label,
+                "description": f"non-zero bytes in a normally zero-filled padding region ({nonzero} of {len(chunk)} bytes)",
+                "suspicion": "high" if nonzero > 16 else "medium",
+            })
+            if nonzero >= _MIN_EVIDENCE_BYTES and int(np.max(chunk)) <= _LOW_BITS_MAX:
+                two_bit_regions += 1
                 findings.append({
                     "field": label,
-                    "description": f"non-zero bytes in normally slack region ({nz} bytes)",
-                    "suspicion": "high" if nz > 16 else "medium",
+                    "description": "padding holds only values 0-3: the signature of a 2-bit-per-byte slack embed",
+                    "suspicion": "high",
                 })
-                suspicious += min(1.0, nz / max(1, len(chunk)))
 
-            if ent > 6.5:
-                high_entropy_regions += 1
-                findings.append({
-                    "field": label,
-                    "description": f"section slack entropy higher than expected ({ent:.2f})",
-                    "suspicion": "medium",
-                })
-                suspicious += 0.4
-
-        conf = 0.0
-        if regions:
-            conf = min(1.0, suspicious / max(1.0, len(regions)))
-            
         extracted = None
         try:
             if btype == "PE":
                 from core.binary.pe import PEEncoder
                 extracted = PEEncoder().decode(file_bytes)
-            elif btype == "ELF":
+            else:
                 from core.binary.elf import ELFEncoder
                 extracted = ELFEncoder().decode(file_bytes)
-        except Exception:
-            pass
+        except ValueError as exc:
+            log.debug("binary: no extractable payload: %s", exc)
 
         if extracted is not None:
-            conf = 1.0
-            nonzero_regions += 1
+            confidence = 1.0
             findings.insert(0, {
                 "field": "Slack Space",
-                "description": "Valid StegoForge payload identified and blindly extracted!",
-                "suspicion": "high"
+                "description": "Valid StegoForge payload identified and extracted",
+                "suspicion": "high",
             })
+        elif evidence_bytes >= _MIN_EVIDENCE_BYTES:
+            confidence = 0.8 if (two_bit_regions or evidence_bytes > 16) else 0.5
+        else:
+            confidence = 0.0
 
-        detected = conf >= 0.2 or nonzero_regions > 0
+        detected = extracted is not None or evidence_bytes >= _MIN_EVIDENCE_BYTES
         res = DetectionResult(
             method=self.name,
             detected=detected,
-            confidence=round(conf, 4),
+            confidence=confidence,
             details={
                 "binary_type": btype,
-                "regions_scanned": len(regions),
-                "high_entropy_regions": high_entropy_regions,
-                "nonzero_regions": nonzero_regions,
+                "regions_scanned": scanned,
+                "regions_with_data_ignored": informational,
+                "suspicious_regions": evidence_regions,
+                "two_bit_pattern_regions": two_bit_regions,
                 "interpretation": (
-                    "Binary slack/notes anomalies OR valid payload detected" if detected else "No strong anomalies detected"
+                    "Valid payload extracted or non-zero data in zero-filled padding"
+                    if detected else "Padding is clean; note/overlay data is not treated as slack"
                 ),
             },
             findings=findings,
@@ -104,19 +127,14 @@ class BinaryDetector(BaseDetector):
         return res
 
 
-def _entropy(data: bytes) -> float:
-    if not data:
-        return 0.0
-    counts = [0] * 256
-    for b in data:
-        counts[b] += 1
-    n = len(data)
-    ent = 0.0
-    for c in counts:
-        if c:
-            p = c / n
-            ent -= p * math.log2(p)
-    return ent
+def _is_toolchain_fill(chunk: np.ndarray) -> bool:
+    """True for padding made of one repeated non-zero byte (0x90/0xCC/0xFF/'X'), which toolchains do emit.
+
+    A handful of other bytes is tolerated (a rewriter may patch a few of them). Zero is excluded on
+    purpose: a short payload in an otherwise zero-filled region is exactly what this detector looks for.
+    """
+    top = int(np.bincount(chunk, minlength=256).argmax())
+    return top != 0 and float(np.count_nonzero(chunk == top)) >= _FILL_DOMINANCE * len(chunk)
 
 
 def _elf_slack_regions(data: bytes):

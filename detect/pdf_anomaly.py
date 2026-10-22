@@ -3,9 +3,13 @@ detect/pdf_anomaly.py - Lightweight PDF anomaly detector.
 """
 from __future__ import annotations
 
+import logging
+
 import math
 
 from detect.base import BaseDetector, DetectionResult
+
+log = logging.getLogger(__name__)
 
 
 class PDFAnomalyDetector(BaseDetector):
@@ -50,13 +54,13 @@ class PDFAnomalyDetector(BaseDetector):
             suspicious += 0.25
 
         conf = float(max(0.0, min(1.0, suspicious)))
-        
+
         extracted = None
         try:
             from core.document.pdf import PDFEncoder
             extracted = PDFEncoder().decode(file_bytes)
-        except Exception:
-            pass
+        except Exception as _exc:
+            log.debug("suppressed: %s", _exc)
 
         if extracted is not None:
             conf = 1.0

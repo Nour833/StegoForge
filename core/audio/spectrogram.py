@@ -1,46 +1,34 @@
 """
-core/audio/spectrogram.py — Spectrogram art steganography.
+core/audio/spectrogram.py — spectrogram art.
 
-Uses Python stdlib wave + numpy for Python 3.14 compatibility.
-Embeds a visible image or text into the audio spectrogram.
+VISUAL WATERMARK ONLY — this is not a reversible byte channel. ``encode``
+renders a short text or an image into audible-spectrum energy so the picture
+becomes visible in a spectrogram viewer; ``decode`` returns a PNG rendering of
+the carrier's spectrum, NOT the original payload bytes. Use ``audio-lsb`` or
+``phase`` when the data must come back out.
+
+Because the payload is only *rendered*, it is not encrypted (a ciphertext would
+just render as noise), and an image payload may be far larger than the 120-byte
+text limit.
 """
+from __future__ import annotations
+
 import io
-import struct
-import wave
+import logging
+
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from core.audio._convert import decode_audio_to_wav
+from core.audio.mono import float_to_wav_mono, wav_to_float_mono
 from core.base import BaseEncoder
+from core.bits import validate_payload_not_empty
 
+log = logging.getLogger(__name__)
 
-def _wav_to_float_mono(data: bytes) -> tuple[np.ndarray, dict]:
-    buf = io.BytesIO(data)
-    with wave.open(buf) as wf:
-        params = {
-            "nchannels": wf.getnchannels(),
-            "sampwidth": wf.getsampwidth(),
-            "framerate": wf.getframerate(),
-            "nframes": wf.getnframes(),
-        }
-        raw = wf.readframes(wf.getnframes())
-
-    samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32)
-    if params["nchannels"] == 2:
-        samples = samples.reshape(-1, 2).mean(axis=1)
-    samples /= 32768.0
-    return samples, params
-
-
-def _float_to_wav(samples: np.ndarray, framerate: int) -> bytes:
-    out_int16 = np.clip(samples * 32768, -32768, 32767).astype(np.int16)
-    buf = io.BytesIO()
-    with wave.open(buf, 'w') as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(framerate)
-        wf.writeframes(out_int16.tobytes())
-    return buf.getvalue()
+MAX_TEXT_BYTES = 120
+MAX_IMAGE_BYTES = 8 * 1024 * 1024
+MAX_RENDER_FRAMES = 4096
 
 
 class SpectrogramEncoder(BaseEncoder):
@@ -50,108 +38,93 @@ class SpectrogramEncoder(BaseEncoder):
     AMPLITUDE_DB = -40.0
     FRAME_SIZE = 512
     HOP_SIZE = 256
+    IMG_W = 256
+
+    def output_suffix(self, carrier_suffix: str) -> str:
+        return ".wav"
+
+    def capacity(self, carrier_bytes: bytes = b"", **kwargs) -> int:
+        """Largest payload accepted: images up to 8 MiB, plain text up to 120 bytes."""
+        return MAX_IMAGE_BYTES
+
+    @staticmethod
+    def _as_image(payload: bytes) -> Image.Image | None:
+        if payload[:4] != b"\x89PNG" and payload[:2] != b"\xff\xd8":
+            return None
+        try:
+            return Image.open(io.BytesIO(payload)).convert("L")
+        except Exception as exc:  # noqa: BLE001 - any parse failure means "treat as text"
+            log.debug("spectrogram payload is not a readable image: %s", exc)
+            return None
 
     def _render_secret(self, payload_bytes: bytes) -> np.ndarray:
-        IMG_H = self.FRAME_SIZE // 2
-        IMG_W = 256
+        height = self.FRAME_SIZE // 2
+        image = self._as_image(payload_bytes)
+        if image is not None:
+            return np.array(image.resize((self.IMG_W, height), Image.Resampling.LANCZOS), dtype=np.float32) / 255.0
 
-        is_image = (
-            payload_bytes[:4] == b'\x89PNG' or
-            payload_bytes[:2] == b'\xff\xd8'
-        )
-
-        if is_image:
+        canvas = Image.new("L", (self.IMG_W, height), 0)
+        font = None
+        for path in ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                     "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf"):
             try:
-                img = Image.open(io.BytesIO(payload_bytes)).convert("L")
-                img = img.resize((IMG_W, IMG_H), Image.LANCZOS)
-                return np.array(img, dtype=np.float32) / 255.0
-            except Exception:
-                pass
-
-        text = payload_bytes.decode("utf-8", errors="replace")
-        img = Image.new("L", (IMG_W, IMG_H), 0)
-        draw = ImageDraw.Draw(img)
-        try:
-            font_paths = [
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-                "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
-            ]
-            font = None
-            for fp in font_paths:
-                try:
-                    font = ImageFont.truetype(fp, 20)
-                    break
-                except OSError:
-                    continue
-            if font is None:
-                font = ImageFont.load_default()
-        except Exception:
-            font = ImageFont.load_default()
-
-        draw.text((5, IMG_H // 2 - 15), text[:30], fill=255, font=font)
-        return np.array(img, dtype=np.float32) / 255.0
-
-    def capacity(self, carrier_bytes: bytes, **kwargs) -> int:
-        return 32768
+                font = ImageFont.truetype(path, 20)
+                break
+            except OSError:
+                continue
+        ImageDraw.Draw(canvas).text(
+            (5, height // 2 - 15),
+            payload_bytes.decode("utf-8", errors="replace")[:30],
+            fill=255,
+            font=font or ImageFont.load_default(),
+        )
+        return np.array(canvas, dtype=np.float32) / 255.0
 
     def encode(self, carrier_bytes: bytes, payload_bytes: bytes, ext: str = ".wav", **kwargs) -> bytes:
-        wav_bytes = decode_audio_to_wav(carrier_bytes, ext)
-        samples, params = _wav_to_float_mono(wav_bytes)
-        framerate = params["framerate"]
+        validate_payload_not_empty(payload_bytes)
+        if self._as_image(payload_bytes) is None and len(payload_bytes) > MAX_TEXT_BYTES:
+            raise ValueError(
+                f"Payload too large for a spectrogram text watermark: {len(payload_bytes)} bytes "
+                f"(limit {MAX_TEXT_BYTES}; images are accepted up to {MAX_IMAGE_BYTES // (1024 * 1024)} MiB)"
+            )
+        if len(payload_bytes) > MAX_IMAGE_BYTES:
+            raise ValueError(f"Payload too large: {len(payload_bytes)} bytes (limit {MAX_IMAGE_BYTES})")
 
-        spec_img = self._render_secret(payload_bytes)
+        samples, params = wav_to_float_mono(decode_audio_to_wav(carrier_bytes, ext))
+        spec_img = self._render_secret(payload_bytes)              # (freq_bins, time_steps)
         freq_bins, time_steps = spec_img.shape
         amplitude = 10 ** (self.AMPLITUDE_DB / 20.0)
 
-        synth_samples = []
         rng = np.random.default_rng(42)
+        phase = rng.uniform(0, 2 * np.pi, size=(time_steps, freq_bins))
+        direct = (spec_img.T * amplitude) * np.exp(1j * phase)      # (time_steps, freq_bins)
+        spectrum = np.zeros((time_steps, self.FRAME_SIZE), dtype=complex)
+        spectrum[:, 1:freq_bins + 1] = direct
+        spectrum[:, self.FRAME_SIZE - 1 - np.arange(freq_bins)] = np.conj(direct)  # real-signal mirror
+        synth: np.ndarray = np.fft.ifft(spectrum, axis=1).real[:, :self.HOP_SIZE].reshape(-1).astype(np.float32)
 
-        for t in range(time_steps):
-            freqs = np.zeros(self.FRAME_SIZE, dtype=complex)
-            for f in range(freq_bins):
-                mag = spec_img[f, t] * amplitude
-                phase = rng.uniform(0, 2 * np.pi)
-                freqs[f + 1] = mag * np.exp(1j * phase)
-                mir = self.FRAME_SIZE - f - 1
-                if mir > 0:
-                    freqs[mir] = mag * np.exp(-1j * phase)
-            frame = np.fft.ifft(freqs).real
-            synth_samples.extend(frame[:self.HOP_SIZE].tolist())
-
-        synth = np.array(synth_samples, dtype=np.float32)
-
-        if len(synth) < len(samples):
-            synth = np.pad(synth, (0, len(samples) - len(synth)))
-        else:
-            synth = synth[:len(samples)]
-
-        mixed = np.clip(samples + synth, -1.0, 1.0)
-        return _float_to_wav(mixed, framerate)
+        synth = np.pad(synth, (0, len(samples) - len(synth))) if len(synth) < len(samples) else synth[:len(samples)]
+        return float_to_wav_mono(np.clip(samples + synth, -1.0, 1.0), params["framerate"])
 
     def decode(self, stego_bytes: bytes, ext: str = ".wav", **kwargs) -> bytes:
-        wav_bytes = decode_audio_to_wav(stego_bytes, ext)
-        samples, params = _wav_to_float_mono(wav_bytes)
-        n_frames = (len(samples) - self.FRAME_SIZE) // self.HOP_SIZE
+        """Return a PNG of the carrier's spectrum (not the embedded payload).
+
+        Only the first ``MAX_RENDER_FRAMES`` frames (~24 s) are rendered: the
+        watermark is written at the start, and this bounds memory on long audio.
+        """
+        samples, _ = wav_to_float_mono(decode_audio_to_wav(stego_bytes, ext))
+        n_frames = min((len(samples) - self.FRAME_SIZE) // self.HOP_SIZE, MAX_RENDER_FRAMES)
+        if n_frames <= 0:
+            raise ValueError("Audio too short to render a spectrogram")
         freq_bins = self.FRAME_SIZE // 2
-        spec = np.zeros((freq_bins, n_frames))
 
-        for i in range(n_frames):
-            start = i * self.HOP_SIZE
-            frame = samples[start:start + self.FRAME_SIZE]
-            if len(frame) < self.FRAME_SIZE:
-                break
-            windowed = frame * np.hanning(self.FRAME_SIZE)
-            fft_result = np.abs(np.fft.rfft(windowed))[:freq_bins]
-            spec[:, i] = fft_result
-
+        starts = np.arange(n_frames) * self.HOP_SIZE
+        frames = samples[starts[:, None] + np.arange(self.FRAME_SIZE)] * np.hanning(self.FRAME_SIZE)
+        spec = np.abs(np.fft.rfft(frames, axis=1))[:, :freq_bins].T
         spec_log = np.log1p(spec * 1000.0)
-        if spec_log.max() > 0:
-            spec_norm = ((spec_log / spec_log.max()) * 255).astype(np.uint8)
-        else:
-            spec_norm = spec_log.astype(np.uint8)
+        top = spec_log.max()
+        norm = ((spec_log / top) * 255).astype(np.uint8) if top > 0 else spec_log.astype(np.uint8)
 
-        spec_flipped = np.flipud(spec_norm)
-        img = Image.fromarray(spec_flipped, mode="L")
         buf = io.BytesIO()
-        img.save(buf, format="PNG")
+        Image.fromarray(np.flipud(norm)).save(buf, format="PNG")
         return buf.getvalue()

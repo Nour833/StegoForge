@@ -15,10 +15,8 @@ Creates in tests/fixtures/:
   - sample.xlsx        minimal valid XLSX
   - sample.txt         lorem ipsum text file
 """
-import os
 import sys
 import io
-import struct
 import zipfile
 from pathlib import Path
 

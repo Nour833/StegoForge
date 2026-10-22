@@ -1,182 +1,208 @@
 """
-core/document/office.py — DOCX/XLSX Open XML stream injection steganography.
+core/document/office.py — DOCX / XLSX custom-XML-part steganography.
 
-DOCX and XLSX are ZIP archives containing XML files.
-This module adds a custom XML part to the archive:
-  - DOCX: word/custom/stegodata.xml
-  - XLSX: xl/custom/stegodata.xml
+DOCX and XLSX are OPC (ZIP) packages. The payload is added as one extra XML
+part that Office never displays::
 
-And registers a relationship entry in the appropriate _rels file.
+    DOCX  word/custom/stegodata.xml     (relationship from word/_rels/document.xml.rels)
+    XLSX  xl/custom/stegodata.xml       (relationship from xl/_rels/workbook.xml.rels)
 
-The output document opens correctly in Microsoft Word/Excel/LibreOffice.
-The custom XML part is never displayed in the document UI.
+To keep the package valid for strict OPC readers the part is registered in
+``[Content_Types].xml`` and linked with a relationship whose *target resolves*
+(relative to the source part's folder) and whose type is a private StegoForge
+type, so Word/Excel never treat it as one of their own part kinds. All edits
+use real XML namespaces (lxml); existing relationships and content types are
+preserved untouched.
 
-Payload: zlib-compressed + base64-encoded for clean XML embedding.
+Payload: ``base64('SFRG_OFFICE' + zlib([4-byte length][payload]))``.
 """
-import io
-import os
-import zlib
-import struct
+from __future__ import annotations
+
 import base64
+import io
+import posixpath
+import struct
 import zipfile
-import xml.etree.ElementTree as ET
+import zlib
+
+from lxml import etree
 
 from core.base import BaseEncoder
+from core.bits import validate_payload_not_empty
+from core.config import get_config
 
 STEGO_FILENAME_DOCX = "word/custom/stegodata.xml"
 STEGO_FILENAME_XLSX = "xl/custom/stegodata.xml"
 RELS_DOCX = "word/_rels/document.xml.rels"
 RELS_XLSX = "xl/_rels/workbook.xml.rels"
+CONTENT_TYPES = "[Content_Types].xml"
 
 MAGIC = b"SFRG_OFFICE"
 HEADER_SIZE = 4
 
-RELATIONSHIP_TYPE = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml"
+REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
+CT_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
+STEGO_NS = "http://stegoforge.io/custom"
+RELATIONSHIP_TYPE = "http://stegoforge.io/relationships/stegodata"
 RELATIONSHIP_ID = "rIdStegoForge"
 
+def _parser() -> etree.XMLParser:
+    """Parser for untrusted XML: no entity expansion, no network, no huge trees.
 
-def _make_stego_xml(payload_bytes: bytes) -> bytes:
-    header = struct.pack(">I", len(payload_bytes))
-    compressed = zlib.compress(header + payload_bytes, level=9)
-    encoded = base64.b64encode(MAGIC + compressed).decode("ascii")
+    Created per call — lxml parsers must not be shared between threads.
+    """
+    return etree.XMLParser(resolve_entities=False, no_network=True, huge_tree=False)
 
-    root = ET.Element("StegoData", xmlns="http://stegoforge.io/custom")
-    root.text = encoded
-    tree = ET.ElementTree(root)
-    buf = io.BytesIO()
-    tree.write(buf, encoding="utf-8", xml_declaration=True)
-    return buf.getvalue()
+
+def _serialize(root: etree._Element) -> bytes:
+    return etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+
+
+def _make_stego_xml(payload: bytes) -> bytes:
+    body = zlib.compress(struct.pack(">I", len(payload)) + payload, level=9)
+    root = etree.Element(f"{{{STEGO_NS}}}StegoData", nsmap={None: STEGO_NS})
+    root.text = base64.b64encode(MAGIC + body).decode("ascii")
+    return _serialize(root)
 
 
 def _parse_stego_xml(xml_bytes: bytes) -> bytes:
-    root = ET.fromstring(xml_bytes)
-    encoded_str = root.text
-    if not encoded_str:
+    try:
+        root = etree.fromstring(xml_bytes, _parser())
+    except etree.XMLSyntaxError as exc:
+        raise ValueError(f"Corrupted Office stego XML: {exc}") from exc
+    text = (root.text or "").strip()
+    if not text:
         raise ValueError("Empty StegoData XML element")
-
-    raw = base64.b64decode(encoded_str)
+    try:
+        raw = base64.b64decode(text)
+    except Exception as exc:
+        raise ValueError(f"Corrupted Office stego encoding: {exc}") from exc
     if not raw.startswith(MAGIC):
         raise ValueError("Invalid Office steganography marker")
 
-    compressed = raw[len(MAGIC):]
-    decompressed = zlib.decompress(compressed)
-    length = struct.unpack(">I", decompressed[:HEADER_SIZE])[0]
-    payload = decompressed[HEADER_SIZE:HEADER_SIZE + length]
+    cap = get_config().decomp_max_bytes
+    try:
+        inflater = zlib.decompressobj()
+        data = inflater.decompress(raw[len(MAGIC):], cap)
+    except zlib.error as exc:
+        raise ValueError(f"Corrupted Office payload (decompression failed): {exc}") from exc
+    if inflater.unconsumed_tail:
+        raise ValueError("Office payload exceeds the decompression cap")
+    if len(data) < HEADER_SIZE:
+        raise ValueError("Corrupted Office payload header")
+    length = struct.unpack(">I", data[:HEADER_SIZE])[0]
+    if length <= 0 or length > cap:
+        raise ValueError(f"Invalid Office payload length: {length}")
+    payload = data[HEADER_SIZE:HEADER_SIZE + length]
     if len(payload) < length:
         raise ValueError("Incomplete Office payload data")
     return payload
 
 
-def _add_relationship(rels_content: bytes, custom_xml_path: str) -> bytes:
-    """Add a relationship entry to the _rels XML file."""
-    try:
-        root = ET.fromstring(rels_content)
-    except ET.ParseError:
-        # Create minimal rels file
-        root = ET.Element("Relationships",
-                           xmlns="http://schemas.openxmlformats.org/package/2006/relationships")
-
-    # Remove existing StegoForge relationship if present
+def _add_relationship(rels_xml: bytes | None, rels_part: str, stego_part: str) -> bytes:
+    """Return the rels part with a StegoForge relationship (replacing any earlier one)."""
+    root = etree.fromstring(rels_xml, _parser()) if rels_xml else etree.Element(f"{{{REL_NS}}}Relationships", nsmap={None: REL_NS})
     for child in list(root):
         if child.get("Id") == RELATIONSHIP_ID:
             root.remove(child)
+    # Targets resolve against the *source part's* folder: word/_rels/x.rels -> word/
+    source_dir = posixpath.dirname(posixpath.dirname(rels_part))
+    etree.SubElement(
+        root,
+        f"{{{REL_NS}}}Relationship",
+        Id=RELATIONSHIP_ID,
+        Type=RELATIONSHIP_TYPE,
+        Target=posixpath.relpath(stego_part, source_dir),
+    )
+    return _serialize(root)
 
-    # Determine relative target from word/ or xl/
-    target = f"../{custom_xml_path.split('/', 1)[1]}" if "/" in custom_xml_path else custom_xml_path
 
-    ET.SubElement(root, "Relationship",
-                  Id=RELATIONSHIP_ID,
-                  Type=RELATIONSHIP_TYPE,
-                  Target=target)
-
-    buf = io.BytesIO()
-    ET.ElementTree(root).write(buf, encoding="utf-8", xml_declaration=True)
-    return buf.getvalue()
+def _ensure_content_type(content_types_xml: bytes | None, stego_part: str) -> bytes:
+    """Return [Content_Types].xml with an Override for the StegoForge part."""
+    if content_types_xml:
+        root = etree.fromstring(content_types_xml, _parser())
+    else:
+        root = etree.Element(f"{{{CT_NS}}}Types", nsmap={None: CT_NS})
+        etree.SubElement(root, f"{{{CT_NS}}}Default", Extension="rels",
+                         ContentType="application/vnd.openxmlformats-package.relationships+xml")
+        etree.SubElement(root, f"{{{CT_NS}}}Default", Extension="xml", ContentType="application/xml")
+    part_name = "/" + stego_part
+    if not any(c.tag == f"{{{CT_NS}}}Override" and c.get("PartName") == part_name for c in root):
+        etree.SubElement(root, f"{{{CT_NS}}}Override", PartName=part_name, ContentType="application/xml")
+    return _serialize(root)
 
 
 class OfficeEncoder(BaseEncoder):
     name = "office"
     supported_extensions = [".docx", ".xlsx"]
 
-    def _detect_type(self, carrier_bytes: bytes, filename: str = "") -> str:
-        """Return 'docx' or 'xlsx' based on filename or content inspection."""
+    @staticmethod
+    def _detect_type(carrier_bytes: bytes, filename: str = "") -> str:
+        """Return 'docx' or 'xlsx' from the file name, else by peeking into the ZIP."""
         fn = filename.lower()
         if fn.endswith(".xlsx"):
             return "xlsx"
         if fn.endswith(".docx"):
             return "docx"
-        # Peek into ZIP to guess type
         try:
             with zipfile.ZipFile(io.BytesIO(carrier_bytes)) as zf:
                 names = zf.namelist()
-                if any(n.startswith("word/") for n in names):
-                    return "docx"
-                if any(n.startswith("xl/") for n in names):
-                    return "xlsx"
         except zipfile.BadZipFile:
-            pass
-        return "docx"  # default
+            return "docx"
+        if any(n.startswith("xl/") for n in names) and not any(n.startswith("word/") for n in names):
+            return "xlsx"
+        return "docx"
 
     def capacity(self, carrier_bytes: bytes, **kwargs) -> int:
-        # Office documents are ZIP archives. Custom XML injection is effectively
-        # only limited by disk space, but we return the carrier's own size as a
-        # practical ceiling (no point hiding more than the carrier itself weighs).
-        # Floor at 512KB so tiny test files report sensible numbers.
+        # Effectively limited only by disk space; use the carrier's own size as a
+        # practical ceiling (min 512 KiB so tiny test files report sensible numbers).
         return max(len(carrier_bytes), 512 * 1024)
 
-    def encode(
-        self,
-        carrier_bytes: bytes,
-        payload_bytes: bytes,
-        filename: str = "",
-        **kwargs,
-    ) -> bytes:
-        doc_type = self._detect_type(carrier_bytes, filename)
-        stego_file = STEGO_FILENAME_DOCX if doc_type == "docx" else STEGO_FILENAME_XLSX
-        rels_file = RELS_DOCX if doc_type == "docx" else RELS_XLSX
+    def encode(self, carrier_bytes: bytes, payload_bytes: bytes, filename: str = "", **kwargs) -> bytes:
+        validate_payload_not_empty(payload_bytes)
+        cap = self.capacity(carrier_bytes)
+        if len(payload_bytes) > cap:
+            raise ValueError(f"Payload too large: {len(payload_bytes)} bytes, Office capacity: {cap} bytes")
 
-        stego_xml = _make_stego_xml(payload_bytes)
+        kind = self._detect_type(carrier_bytes, filename)
+        stego_part = STEGO_FILENAME_DOCX if kind == "docx" else STEGO_FILENAME_XLSX
+        rels_part = RELS_DOCX if kind == "docx" else RELS_XLSX
+        cfg = get_config()
 
-        buf = io.BytesIO()
+        out = io.BytesIO()
         with zipfile.ZipFile(io.BytesIO(carrier_bytes), "r") as zin:
-            with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zout:
-                for item in zin.infolist():
+            infos = zin.infolist()
+            if len(infos) > cfg.zip_max_entries:
+                raise ValueError("Office document has too many ZIP entries")
+            if sum(i.file_size for i in infos) > cfg.zip_max_total_bytes:
+                raise ValueError("Office document exceeds the size cap")
+            names = {i.filename for i in infos}
+            with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as zout:
+                for item in infos:
+                    if item.filename == stego_part:
+                        continue  # replaced below
                     data = zin.read(item.filename)
-                    if item.filename == stego_file:
-                        continue  # will be replaced
-                    if item.filename == rels_file:
-                        data = _add_relationship(data, stego_file)
+                    if item.filename == rels_part:
+                        data = _add_relationship(data, rels_part, stego_part)
+                    elif item.filename == CONTENT_TYPES:
+                        data = _ensure_content_type(data, stego_part)
                     zout.writestr(item, data)
+                zout.writestr(stego_part, _make_stego_xml(bytes(payload_bytes)))
+                if rels_part not in names:
+                    zout.writestr(rels_part, _add_relationship(None, rels_part, stego_part))
+                if CONTENT_TYPES not in names:
+                    zout.writestr(CONTENT_TYPES, _ensure_content_type(None, stego_part))
+        return out.getvalue()
 
-                # Add stego XML part
-                zout.writestr(stego_file, stego_xml)
-
-                # Add relationship if file didn't exist
-                if rels_file not in [i.filename for i in zin.infolist()]:
-                    fake_rels = b'<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>'
-                    new_rels = _add_relationship(fake_rels, stego_file)
-                    zout.writestr(rels_file, new_rels)
-
-        return buf.getvalue()
-
-    def decode(
-        self,
-        stego_bytes: bytes,
-        filename: str = "",
-        **kwargs,
-    ) -> bytes:
-        doc_type = self._detect_type(stego_bytes, filename)
-        stego_file = STEGO_FILENAME_DOCX if doc_type == "docx" else STEGO_FILENAME_XLSX
-
-        try:
-            with zipfile.ZipFile(io.BytesIO(stego_bytes), "r") as zf:
-                if stego_file not in zf.namelist():
-                    raise ValueError(
-                        f"No StegoForge payload found in Office document "
-                        f"(missing: {stego_file})"
-                    )
-                xml_data = zf.read(stego_file)
-        except zipfile.BadZipFile as e:
-            raise ValueError(f"Invalid Office document (bad ZIP): {e}") from e
-
-        return _parse_stego_xml(xml_data)
+    def decode(self, stego_bytes: bytes, filename: str = "", **kwargs) -> bytes:
+        kind = self._detect_type(stego_bytes, filename)
+        stego_part = STEGO_FILENAME_DOCX if kind == "docx" else STEGO_FILENAME_XLSX
+        with zipfile.ZipFile(io.BytesIO(stego_bytes), "r") as zf:
+            try:
+                info = zf.getinfo(stego_part)
+            except KeyError:
+                raise ValueError(f"No StegoForge payload found in Office document (missing: {stego_part})") from None
+            if info.file_size > 2 * get_config().decomp_max_bytes:
+                raise ValueError("Office payload part exceeds the size cap")
+            xml = zf.read(info)
+        return _parse_stego_xml(xml)

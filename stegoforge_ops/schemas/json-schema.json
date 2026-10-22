@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stegoforge.io/schemas/v1.json",
+  "title": "StegoForge --json outputs (report_version 1)",
+  "type": "object",
+  "definitions": {
+    "encode": {
+      "type": "object",
+      "required": ["status", "method", "carrier", "output"],
+      "properties": {
+        "status": {"const": "success"},
+        "method": {"type": "string"},
+        "carrier": {"type": "string"},
+        "payload_size": {"type": "integer"},
+        "encrypted_size": {"type": "integer"},
+        "capacity": {"type": "integer"},
+        "output": {"type": "string"},
+        "depth": {"type": "integer"},
+        "decoy_mode": {"type": "boolean"},
+        "wet_paper": {"type": "boolean"},
+        "preserve_fingerprint": {"type": "boolean"},
+        "target_profile": {"type": "object"},
+        "resized": {"type": "object"},
+        "survival_test": {
+          "type": "object",
+          "properties": {
+            "target": {"type": "string"},
+            "survived": {"type": "boolean"},
+            "corrected_bits": {"type": "integer"},
+            "simulation": {"type": "object"},
+            "error": {"type": ["string", "null"]}
+          }
+        }
+      }
+    },
+    "decode": {
+      "type": "object",
+      "required": ["status", "method", "file", "output"],
+      "properties": {
+        "status": {"const": "success"},
+        "method": {"type": "string"},
+        "file": {"type": "string"},
+        "payload_size": {"type": "integer"},
+        "output": {"type": "string"},
+        "wet_paper": {"type": "boolean"},
+        "wet_corrected_bits": {"type": "integer"}
+      }
+    },
+    "detector_result": {
+      "type": "object",
+      "required": ["method", "detected", "confidence"],
+      "properties": {
+        "method": {"type": "string"},
+        "detected": {"type": "boolean"},
+        "confidence": {"type": "number"},
+        "details": {"type": "object"},
+        "findings": {"type": "array"},
+        "has_payload": {"type": "boolean"}
+      }
+    },
+    "detect": {
+      "type": "object",
+      "required": ["status", "file", "detectors_run", "results"],
+      "properties": {
+        "status": {"const": "success"},
+        "report_version": {"const": 1},
+        "tool_version": {"type": "string"},
+        "file": {"type": "string"},
+        "file_sha256": {"type": "string"},
+        "case_id": {"type": ["string", "null"]},
+        "detectors_run": {"type": "integer"},
+        "results": {"type": "array", "items": {"$ref": "#/definitions/detector_result"}},
+        "note": {"type": "string"}
+      }
+    },
+    "ctf": {
+      "type": "object",
+      "required": ["status", "file", "overall_verdict", "results"],
+      "properties": {
+        "status": {"const": "success"},
+        "report_version": {"const": 1},
+        "tool_version": {"type": "string"},
+        "file": {"type": "string"},
+        "file_sha256": {"type": "string"},
+        "case_id": {"type": ["string", "null"]},
+        "file_size": {"type": "integer"},
+        "overall_verdict": {"type": "string"},
+        "overall_confidence": {"type": "number"},
+        "results": {"type": "array", "items": {"$ref": "#/definitions/detector_result"}},
+        "saved_payloads": {"type": "array", "items": {"type": "string"}},
+        "notes": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "capacity": {
+      "type": "object",
+      "required": ["status", "carrier", "method", "capacity_bytes"],
+      "properties": {
+        "status": {"const": "success"},
+        "carrier": {"type": "string"},
+        "method": {"type": "string"},
+        "depth": {"type": "integer"},
+        "capacity_bytes": {"type": "integer"},
+        "capacity_kb": {"type": "number"},
+        "capacity_mb": {"type": "number"},
+        "stealth_score": {"type": "integer"},
+        "jnd_safe_dct_capacity": {"type": "object"},
+        "video_context": {"type": "object"}
+      }
+    },
+    "diff": {
+      "type": "object",
+      "required": ["carrier", "stego"],
+      "properties": {
+        "carrier": {"type": "string"},
+        "stego": {"type": "string"},
+        "type": {"type": "string"},
+        "heatmap": {"type": ["string", "null"]}
+      }
+    },
+    "batch": {
+      "type": "object",
+      "required": ["batch_dir", "total", "passed", "failed", "rows"],
+      "properties": {
+        "batch_dir": {"type": "string"},
+        "payload": {"type": "string"},
+        "total": {"type": "integer"},
+        "passed": {"type": "integer"},
+        "failed": {"type": "integer"},
+        "rows": {"type": "array"}
+      }
+    }
+  }
+}
