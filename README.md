@@ -260,7 +260,7 @@ StegoForge is built for digital-forensics research, CTF competitions, privacy wo
 
 ## Contributing
 
-Issues and pull requests are welcome. A new method subclasses `BaseEncoder`, honours its error contract, documents its capacity and what it does not survive in `docs/METHODS.md`, and comes with tests that round-trip a real carrier. Run the checks above before opening a PR.
+Issues and pull requests are welcome; [`CONTRIBUTING.md`](CONTRIBUTING.md) has the details. A new method subclasses `BaseEncoder`, honours its error contract, documents its capacity and what it does not survive in `docs/METHODS.md`, and comes with tests that round-trip a real carrier. Run the checks above before opening a PR. Please follow the [Code of Conduct](CODE_OF_CONDUCT.md), and report security problems privately as described in [`SECURITY.md`](SECURITY.md), not in a public issue.
 
 <div align="center">
   <sub>MIT licensed · built by <a href="https://github.com/Nour833">Nour833</a></sub>

@@ -7,6 +7,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- Community files: `SECURITY.md` (private reporting through GitHub, supported versions, scope), `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1), bug-report and feature-request forms, and a pull-request template.
+
 ### Fixed
 - Debian package: `python3-reedsolo` is now a hard dependency (wet-paper error correction needs it and `stegoforge doctor` lists it as required); it was only recommended, so a minimal install reported a missing required package.
 

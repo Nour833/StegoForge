@@ -1,0 +1,76 @@
+name: Bug report
+description: Something does not work, crashes, or gives a wrong result
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. **Security problems** go through the [private report form](https://github.com/Nour833/StegoForge/security/advisories/new), not here.
+        Please remove passphrases, tokens and any private files from what you paste.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened, and what did you expect?
+      description: One or two sentences.
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: The command you ran
+      description: The exact command line (use a placeholder for the passphrase), or the steps in the web UI.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output or error message
+      description: Add `--json` if it helps. Paste the whole message.
+      render: text
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `stegoforge doctor`
+      description: It prints the version and what your installation can and cannot do.
+      render: text
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Linux
+        - macOS
+        - Windows
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you install it?
+      options:
+        - pipx / pip
+        - Debian package (.deb)
+        - Standalone binary
+        - Docker
+        - AUR
+        - From source
+    validations:
+      required: true
+  - type: textarea
+    id: carrier
+    attributes:
+      label: The file involved
+      description: Its type and size, and whether you can share a small file that reproduces the problem. Do not attach anything private.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I removed passphrases, tokens and private files from this report.
+          required: true
+        - label: I looked for an existing issue about this.
+          required: true

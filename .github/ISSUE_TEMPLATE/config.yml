@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability (private)
+    url: https://github.com/Nour833/StegoForge/security/advisories/new
+    about: Please do not open a public issue for a vulnerability. Use GitHub's private report form.
+  - name: Documentation
+    url: https://github.com/Nour833/StegoForge/tree/main/docs
+    about: Methods and their limits, the threat model, error codes, the JSON API and the man page.
